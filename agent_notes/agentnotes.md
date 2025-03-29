@@ -20,6 +20,13 @@ We've made several significant improvements to the combat log parser:
 
 5. **Match Metadata**: Implemented extraction of match metadata from log files.
 
+6. **Timeline Enhancement**: Completely revamped the timeline event system with:
+   - Enhanced `TimelineEvent` model with additional fields like `event_category`, `importance`, `team_id`, and more
+   - Specialized helper methods for different event types (kills, objectives, economy)
+   - Database migration script to update existing databases
+   - Comprehensive categorization and importance rating system
+   - See `notebook.md` for detailed implementation notes
+
 ## Project Structure
 
 - `smite_parser/` - Main package directory
@@ -37,6 +44,8 @@ We've made several significant improvements to the combat log parser:
   - `test_models.py` - Tests for database models
   - `test_transformers.py` - Tests for data transformation
   - `test_parser.py` - Tests for parser functionality
+- `scripts/` - Utility scripts
+  - `enhance_timeline.py` - Script to update timeline event schema and reprocess events
 - `agent_notes/` - Documentation for agents
   - `project_checklist.md` - Project progress tracking
   - `agentnotes.md` - This file
@@ -74,6 +83,16 @@ Each event type has a specialized transformer function:
 - `transform_item_event()`: Processes item events (purchases, sales)
 - `transform_player_event()`: Processes player events (role assignments, level ups)
 
+### Timeline Event Generation
+
+The timeline generation system now uses specialized helper methods:
+
+- `_generate_kill_timeline_events()`: Tracks player kills with assist detection
+- `_generate_objective_timeline_events()`: Tracks structure destruction and jungle boss kills
+- `_generate_economy_timeline_events()`: Tracks significant item purchases and gold rewards
+
+Each method calculates appropriate importance levels and categorizes events to enable better analysis and visualization.
+
 ### Database Design
 
 The database schema includes these key tables:
@@ -86,7 +105,7 @@ The database schema includes these key tables:
 - **ItemEvent**: Item transactions (purchases, sales)
 - **PlayerEvent**: Player-specific events
 - **PlayerStat**: Aggregated statistics for each player
-- **TimelineEvent**: Key events for match timeline visualization
+- **TimelineEvent**: Key events for match timeline visualization with enhanced fields
 
 ## Testing Strategy
 
@@ -108,11 +127,13 @@ The implementation is progressing well:
 - [x] Data transformation functions implemented
 - [x] Core parser functionality implemented
 - [x] CLI interface created
+- [x] Timeline event enhancement implemented
 - [x] Unit tests for transformers and models
 - [x] Parser tests created
 - [ ] Integration tests
 - [ ] End-to-end tests
-- [ ] Documentation
+- [x] Basic documentation
+- [ ] Comprehensive API documentation
 - [ ] Packaging
 
 See `project_checklist.md` for detailed progress tracking.
@@ -121,8 +142,8 @@ See `project_checklist.md` for detailed progress tracking.
 
 After completing the current implementation:
 
-1. Add advanced statistics calculations
-2. Create visualization tools for match analysis
+1. Implement algorithmic team fight detection
+2. Create visualization tools for enhanced timeline analysis
 3. Implement match comparison functionality
 4. Add export options for different formats
 5. Create a web interface for browsing match data
@@ -133,7 +154,8 @@ After completing the current implementation:
   - `project_checklist.md` - Tracks progress on the project tasks
   - `notebook.md` - Contains observations and insights about the data
   - `agentnotes.md` - This file, with critical project information
-  - `technical_spec.md` - Technical specification for the database schema (in progress)
+  - `technical_spec.md` - Technical specification for the database schema
+- `scripts/enhance_timeline.py` - Utility script for timeline enhancement
 - `data_explore/` - Scripts used for data exploration
 
 ## Project Goals
@@ -157,12 +179,13 @@ Combat logs contain JSON-formatted events with these main types:
 Each event type has multiple subtypes and varying field structures.
 
 ## Development Status
-Currently in Phase 2 (Database Design). Initial data exploration complete, working on technical specification for the database schema.
+Currently in Phase 4 (Testing). Core functionality is complete, timeline enhancement is implemented, and we're working on comprehensive testing and documentation.
 
 ## Next Steps
-1. Complete the technical specification
-2. Review the spec with the user
-3. Implement the parser and database creation scripts
+1. Complete integration and end-to-end tests
+2. Implement algorithmic team fight detection
+3. Create visualization tools for timeline analysis
+4. Prepare for packaging and distribution
 
 ## Notes to Self
 - Remember to convert all string values to appropriate data types
@@ -170,3 +193,4 @@ Currently in Phase 2 (Database Design). Initial data exploration complete, worki
 - Pay attention to team identification in the value1 field
 - Consider performance optimizations for the large volume of combat events
 - Build the database to support the analytics a MOBA esports coach would need 
+- For future timeline enhancements, consider implementing player milestone tracking (first blood, pentakill, etc.) 

@@ -23,9 +23,19 @@ A robust toolkit for parsing, processing, and analyzing SMITE 2 combat log files
   - Team performance metrics
   - Combat pattern recognition
   - Item build efficiency analysis
+- **Enhanced Timeline Events**:
+  - Categorized events (Combat, Economy, Objective, Milestone)
+  - Importance ratings (1-10) for significance filtering
+  - Team fight detection and analysis
+  - Kill streak tracking and recognition
+  - High impact damage and healing events
+  - Game time synchronization in seconds
 
 ## 📋 Recent Improvements
 
+- **Enhanced Timeline Generator**: Implemented a comprehensive timeline event system that categorizes game events, rates their importance (1-10), detects team fights, tracks kill streaks, and identifies high-impact moments
+- **Team Fight Detection**: Added sophisticated team fight detection that identifies player groupings, fight duration, and kill counts to highlight key moments in matches
+- **Kill Streak Tracking**: Added detection and tracking of kill streaks (3+) and streak-ending events for deeper player performance analysis
 - **Assist Calculation**: Implemented a sophisticated system that tracks damage contributions to kills, awarding assists to players who dealt significant damage to victims shortly before their deaths
 - **Kill Event Tracking**: Enhanced detection of both "Kill" and "KillingBlow" events for accurate timeline generation
 - **Item Cost Extraction**: Fixed extraction of item costs from purchase events
@@ -115,11 +125,30 @@ SELECT player_name, team_id, kills, deaths, assists, damage_dealt, healing_done
 FROM player_stats 
 ORDER BY team_id, damage_dealt DESC;
 
--- Timeline of kill events
-SELECT event_time, entity_name, target_name, event_description 
+-- Timeline of kill events with assist information
+SELECT event_time, game_time_seconds, entity_name, target_name, event_description, other_entities as assists
 FROM timeline_events 
-WHERE event_type = 'Kill' 
+WHERE event_type = 'PlayerKill' 
 ORDER BY event_time;
+
+-- Team fight analysis
+SELECT game_time_seconds, event_description, importance, value as duration_seconds, other_entities as participants
+FROM timeline_events
+WHERE event_type = 'TeamFight'
+ORDER BY importance DESC, game_time_seconds;
+
+-- High impact damage events
+SELECT entity_name, target_name, event_description, value as damage_amount
+FROM timeline_events
+WHERE event_category = 'Combat' AND event_type = 'HighDamage'
+ORDER BY value DESC
+LIMIT 10;
+
+-- Kill streak tracking
+SELECT entity_name, event_description, game_time_seconds
+FROM timeline_events
+WHERE event_type IN ('KillStreak', 'KillStreakEnded')
+ORDER BY game_time_seconds;
 
 -- Item purchase progression
 SELECT player_name, event_time, item_name, cost 
@@ -135,6 +164,12 @@ FROM combat_events
 WHERE event_type = 'Damage'
 GROUP BY source_entity, ability_name
 ORDER BY source_entity, total_damage DESC;
+
+-- Timeline events by importance
+SELECT event_category, event_type, importance, COUNT(*) as event_count
+FROM timeline_events
+GROUP BY event_category, event_type, importance
+ORDER BY importance DESC, event_count DESC;
 ```
 
 ### Visualization Opportunities (Coming Soon)
@@ -293,12 +328,19 @@ CREATE TABLE timeline_events (
     match_id TEXT,
     event_time TIMESTAMP,
     timestamp TIMESTAMP,
+    game_time_seconds INTEGER,
     event_type TEXT,
+    event_category TEXT,
+    importance INTEGER,
     event_description TEXT,
     entity_name TEXT,
     target_name TEXT,
+    team_id INTEGER,
     location_x REAL,
     location_y REAL,
+    value FLOAT,
+    related_event_id INTEGER,
+    other_entities TEXT,
     event_details TEXT,
     FOREIGN KEY (match_id) REFERENCES matches (match_id)
 );
@@ -339,4 +381,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📜 License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.

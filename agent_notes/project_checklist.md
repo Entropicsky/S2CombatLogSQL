@@ -46,7 +46,7 @@
 ## Phase 5: Documentation and Packaging
 
 - [ ] Document database schema
-- [ ] Create user documentation
+- [x] Create user documentation
 - [ ] Create developer documentation
 - [ ] Add typing for all modules
 - [ ] Implement packaging and distribution
@@ -72,12 +72,16 @@
 - [x] Fix player event location data issues
 - [x] Fix assist calculation in player statistics
 - [x] Update timeline generation to include KillingBlow events
+- [x] Enhance timeline event model with additional fields (event_category, importance, etc.)
+- [x] Implement categorized timeline event generation (kills, objectives, economy, etc.)
+- [x] Create database migration script for timeline event enhancements
 - [ ] Improve entity team_id assignment for jungle camps and objectives
 
 ## Schema and Data Model Enhancement
 - [x] Create database schema for Smite combat log data
 - [x] Define models for matches, players, entities, and events
 - [x] Implement transformers for different event types
+- [x] Enhance timeline event model to support more sophisticated event analysis
 - [ ] Add indexing for performance optimization
 - [ ] Add views for common query patterns
 
@@ -85,17 +89,25 @@
 - [x] Create test script to verify database integrity
 - [x] Validate player statistics calculation
 - [x] Test timeline event generation
+- [x] Validate enhanced timeline event generation
 - [ ] Create comprehensive test suite with multiple log files
 - [ ] Implement performance testing for large log files
 
-## Visualization and Analysis
-- [ ] Create Streamlit app for log analysis
-- [ ] Implement interactive visualizations of player performance
-- [ ] Add timeline visualization for match events
-- [ ] Create damage/healing/mitigation breakdowns by player
+## Timeline Enhancement
+- [x] Update TimelineEvent model with additional fields for comprehensive event tracking
+- [x] Implement structured approach to timeline event generation with specialized helper methods
+- [x] Create _generate_kill_timeline_events helper for player kills
+- [x] Create _generate_objective_timeline_events helper for towers/jungle bosses
+- [x] Create _generate_economy_timeline_events helper for purchases and gold
+- [x] Implement database migration script for timeline schema updates
+- [x] Create reprocessing script for enhancing existing timeline events
+- [x] Fix timestamp handling in TeamFight events
+- [ ] Create visualization tool for enhanced timeline events
+- [ ] Implement algorithmic team fight detection
 
 ## Documentation
 - [x] Document fixed issues in notebook.md
 - [x] Keep project_checklist.md updated
+- [x] Update README.md with testing and requirements info
 - [ ] Create comprehensive API documentation
 - [ ] Add usage examples for common analysis scenarios 

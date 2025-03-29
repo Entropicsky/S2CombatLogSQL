@@ -50,6 +50,45 @@
 - How to best structure queries for common MOBA analytics (KDA, gold/min, etc.)?
 - Are there additional data points that could be inferred from existing data?
 
+## Timeline Enhancement Implementation (Mar 30, 2025)
+
+We have significantly enhanced the timeline event system to provide more comprehensive match analysis:
+
+1. **TimelineEvent Model Enhancement**:
+   - Added `event_category` field to classify events (Combat, Economy, Objective, etc.)
+   - Added `importance` rating (1-10) to prioritize significant events
+   - Added `team_id` to associate events with specific teams
+   - Added `game_time_seconds` to track time from match start
+   - Added `value` field for numerical event data (damage, gold, etc.)
+   - Added `related_event_id` to link related events
+   - Added `other_entities` to track multiple participants
+   - Enhanced descriptions with `event_description`, `entity_name`, and `target_name`
+
+2. **Specialized Event Generation**:
+   - Implemented a structured approach to timeline generation with specialized helper methods:
+     - `_generate_kill_timeline_events`: Tracks player kills with assist detection
+     - `_generate_objective_timeline_events`: Tracks structure destruction and jungle boss kills
+     - `_generate_economy_timeline_events`: Tracks significant item purchases and gold rewards
+
+3. **Database Schema Migration**:
+   - Created migration script to add new fields to the `timeline_events` table
+   - Implemented script (`enhance_timeline.py`) to handle schema updates and reprocessing
+
+4. **Event Importance Calculation**:
+   - Player kills: Base importance 7, modified by assist count
+   - Objectives: Tower (6), Phoenix (8), Titan (10), Jungle bosses (5-8)
+   - Economy: Item purchases (3-6 based on cost and game stage), Gold spikes (4-5)
+
+5. **Categorization System**:
+   - Combat: Player kills, team fights, significant damage
+   - Objective: Structure destruction, jungle boss kills
+   - Economy: Major item purchases, gold spikes
+   - Milestone: Player achievement events
+
+This enhanced timeline provides a much more nuanced view of match progression and makes it easier to identify key moments that influenced the outcome. The categorization and importance ratings will enable better filtering and visualization of match events.
+
+The implementation was done in a modular way to allow for future enhancements, particularly around team fight detection which will be implemented in a future update.
+
 # Project Notebook: SMITE 2 Combat Log Parser
 
 ## Parser Implementation Notes

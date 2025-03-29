@@ -203,16 +203,36 @@ class TimelineEvent(Base):
     match_id = Column(String, ForeignKey('matches.match_id'), nullable=True)  # Allow null for initial creation
     event_time = Column(DateTime, nullable=False)
     timestamp = Column(DateTime, nullable=True)  # For compatibility
-    event_type = Column(String, nullable=False)
-    event_description = Column(Text, nullable=True)  # Added description field
-    entity_name = Column(String, nullable=True)
-    target_name = Column(String, nullable=True)
+    game_time_seconds = Column(Integer, nullable=True)  # Game time in seconds from match start
+    
+    # Event classification
+    event_type = Column(String, nullable=False)  # Specific event type (Kill, Tower, ItemPurchase, etc.)
+    event_category = Column(String, nullable=True)  # Higher-level category (Combat, Economy, Objective, etc.)
+    importance = Column(Integer, nullable=True)  # 1-10 scale of event significance
+    
+    # Event description and details
+    event_description = Column(Text, nullable=True)  # Human-readable description
+    entity_name = Column(String, nullable=True)  # Primary entity (player/objective)
+    target_name = Column(String, nullable=True)  # Target entity if applicable
+    team_id = Column(Integer, nullable=True)  # Team associated with the event
+    
+    # Location data
     location_x = Column(Float, nullable=True)
     location_y = Column(Float, nullable=True)
-    event_details = Column(Text, nullable=True)  # JSON data
+    
+    # Value information
+    value = Column(Integer, nullable=True)  # Numerical value (damage, gold, etc.)
+    
+    # Relationships
+    related_event_id = Column(Integer, ForeignKey('timeline_events.event_id'), nullable=True)  # For linked events
+    
+    # Additional data
+    other_entities = Column(Text, nullable=True)  # JSON list of other entities involved
+    event_details = Column(Text, nullable=True)  # JSON data with event-specific details
     
     # Relationships
     match = relationship("Match", back_populates="timeline_events")
+    related_events = relationship("TimelineEvent", remote_side=[event_id])  # Self-referential
 
 
 def init_db(engine_url: str) -> None:

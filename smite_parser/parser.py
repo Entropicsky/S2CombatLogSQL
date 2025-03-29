@@ -7,8 +7,10 @@ from datetime import timedelta
 from typing import Dict, List, Optional, Set, Tuple, Any, Iterator
 from collections import defaultdict
 from tqdm import tqdm
+import time
+from pathlib import Path
 
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, func, select, or_
 from sqlalchemy.orm import sessionmaker, Session
 
 from smite_parser.config.config import ParserConfig
@@ -720,102 +722,50 @@ class CombatLogParser:
         session.commit()
     
     def _generate_timeline_events(self, session: Session) -> None:
-        """Generate timeline events from raw events.
+        """Generate comprehensive timeline events from raw events.
+        
+        Creates a rich timeline with all significant match events categorized
+        and prioritized for MOBA analysis.
         
         Args:
             session: Database session
         """
+        self.logger.info("Generating enhanced timeline events")
         timeline_batch = []
         
-        # Get major events for the timeline
-        # 1. Kills (from both Kill and KillingBlow events)
-        kill_events = session.query(CombatEvent).filter(
-            CombatEvent.match_id == self.match_id,
-            (CombatEvent.event_type == "Kill") | (CombatEvent.event_type == "KillingBlow"),
-            CombatEvent.source_entity.in_(self.player_names),
-            CombatEvent.target_entity.in_(self.player_names)
-        ).all()
-        
-        for event in kill_events:
-            timeline_event = TimelineEvent(
-                match_id=self.match_id,
-                timestamp=event.timestamp,
-                event_time=event.event_time,
-                event_description=f"{event.source_entity} killed {event.target_entity}",
-                event_type="Kill",
-                entity_name=event.source_entity,
-                target_name=event.target_entity,
-                location_x=event.location_x or 0.0,
-                location_y=event.location_y or 0.0
-            )
-            timeline_batch.append(timeline_event)
-        
-        # 2. Major item purchases
-        item_events = session.query(ItemEvent).filter(
-            ItemEvent.event_type == "ItemPurchase",
-            ItemEvent.match_id == self.match_id,
-            ItemEvent.cost >= 1000  # High-value items only
-        ).all()
-        
-        for event in item_events:
-            timeline_event = TimelineEvent(
-                match_id=self.match_id,
-                timestamp=event.timestamp,
-                event_time=event.event_time,
-                event_description=f"{event.player_name} purchased {event.item_name}",
-                event_type="ItemPurchase",
-                entity_name=event.player_name,
-                location_x=event.location_x or 0.0,
-                location_y=event.location_y or 0.0
-            )
-            timeline_batch.append(timeline_event)
-        
-        # 3. Objective events (can be expanded based on more specific event types)
-        objective_events = session.query(RewardEvent).filter(
-            RewardEvent.match_id == self.match_id
-        ).filter(
-            (RewardEvent.event_type == "ObjectiveComplete") |
-            (RewardEvent.event_type == "Structure") |
-            (RewardEvent.event_type.like("%Objective%"))
-        ).all()
-        
-        for event in objective_events:
-            source_description = event.source_type or event.event_subtype or "Unknown"
-            timeline_event = TimelineEvent(
-                match_id=self.match_id,
-                timestamp=event.timestamp,
-                event_time=event.event_time,
-                event_description=f"{event.entity_name} completed objective: {source_description}",
-                event_type="Objective",
-                entity_name=event.entity_name,
-                location_x=event.location_x or 0.0,
-                location_y=event.location_y or 0.0
-            )
-            timeline_batch.append(timeline_event)
-        
-        # 4. Add combat sequence starting events if no other events exist
-        if not timeline_batch:
-            self.logger.info("No kill or objective events found for timeline, adding combat sequences")
-            # Get first combat event per player as a fallback
-            first_events = session.query(CombatEvent).filter(
-                CombatEvent.match_id == self.match_id,
-                CombatEvent.source_entity.in_(self.player_names)
-            ).order_by(CombatEvent.event_time).limit(10).all()
+        # Get match start time for game_time_seconds calculation
+        match = session.query(Match).filter_by(match_id=self.match_id).first()
+        if not match or not match.start_time:
+            self.logger.warning("Match start time not available, game_time_seconds will not be calculated")
+            match_start_time = None
+        else:
+            match_start_time = match.start_time
             
-            for event in first_events:
-                timeline_event = TimelineEvent(
-                    match_id=self.match_id,
-                    timestamp=event.timestamp,
-                    event_time=event.event_time,
-                    event_description=f"{event.source_entity} entered combat with {event.target_entity}",
-                    event_type="CombatStart",
-                    entity_name=event.source_entity,
-                    target_name=event.target_entity,
-                    location_x=event.location_x or 0.0,
-                    location_y=event.location_y or 0.0
-                )
-                timeline_batch.append(timeline_event)
-            
+        # Generate timeline events by category
+        # 1. Player kill events
+        kill_events = self._generate_kill_timeline_events(session, match_start_time)
+        timeline_batch.extend(kill_events)
+        
+        # 2. Objective events (towers, phoenix, titans, jungle bosses)
+        objective_events = self._generate_objective_timeline_events(session, match_start_time)
+        timeline_batch.extend(objective_events)
+        
+        # 3. Economy events (significant item purchases, gold spikes)
+        economy_events = self._generate_economy_timeline_events(session, match_start_time)
+        timeline_batch.extend(economy_events)
+        
+        # 4. Significant combat events (high damage, multi-target abilities)
+        combat_events = self._generate_combat_timeline_events(session, match_start_time)
+        timeline_batch.extend(combat_events)
+        
+        # 5. Crowd control and team fight events
+        teamfight_events = self._generate_team_fight_timeline_events(session, match_start_time)
+        timeline_batch.extend(teamfight_events)
+        
+        # 6. Player milestone events (role assignments, god picks, etc.)
+        milestone_events = self._generate_milestone_timeline_events(session, match_start_time)
+        timeline_batch.extend(milestone_events)
+        
         # Add all timeline events to session
         if timeline_batch:
             self.logger.info(f"Adding {len(timeline_batch)} timeline events")
@@ -825,6 +775,22 @@ class CombatLogParser:
         else:
             self.logger.warning("No timeline events generated")
     
+    def _calculate_game_time_seconds(self, event_time, match_start_time):
+        """Calculate seconds elapsed since match start.
+        
+        Args:
+            event_time: Event timestamp
+            match_start_time: Match start timestamp
+            
+        Returns:
+            Seconds elapsed or None if calculation not possible
+        """
+        if not match_start_time or not event_time:
+            return None
+            
+        time_diff = event_time - match_start_time
+        return int(time_diff.total_seconds())
+
     def clear_existing_match(self, session: Session, match_id: str) -> None:
         """Clear existing data for a match.
         
@@ -922,3 +888,998 @@ class CombatLogParser:
                 ability_source=source_entity
             )
             session.add(ability) 
+
+    def _generate_kill_timeline_events(self, session: Session, match_start_time):
+        """Generate timeline events for player kills.
+        
+        Args:
+            session: Database session
+            match_start_time: Match start timestamp
+            
+        Returns:
+            List of timeline events
+        """
+        timeline_events = []
+        
+        # Get player kill events (both Kill and KillingBlow types)
+        kill_events = session.query(CombatEvent).filter(
+            CombatEvent.match_id == self.match_id,
+            (CombatEvent.event_type == "Kill") | (CombatEvent.event_type == "KillingBlow"),
+            CombatEvent.source_entity.in_(self.player_names),
+            CombatEvent.target_entity.in_(self.player_names)
+        ).all()
+        
+        for event in kill_events:
+            # Look for assists - players who damaged the target within 10 seconds before the kill
+            assist_events = session.query(CombatEvent).filter(
+                CombatEvent.match_id == self.match_id,
+                CombatEvent.event_type == "Damage",
+                CombatEvent.target_entity == event.target_entity,
+                CombatEvent.source_entity.in_(self.player_names),
+                CombatEvent.source_entity != event.source_entity,
+                CombatEvent.event_time <= event.event_time,
+                CombatEvent.event_time >= (event.event_time - datetime.timedelta(seconds=10))
+            ).all()
+            
+            # Collect unique assist players
+            assist_players = []
+            for assist in assist_events:
+                if assist.source_entity not in assist_players:
+                    assist_players.append(assist.source_entity)
+            
+            # Get team_id for the killer
+            killer_team_id = None
+            player = session.query(Player).filter_by(
+                match_id=self.match_id,
+                player_name=event.source_entity
+            ).first()
+            if player:
+                killer_team_id = player.team_id
+            
+            # Calculate importance based on context
+            # Kills are base importance 7, multi-kills increase importance
+            importance = 7
+            
+            # Set event description with assists if any
+            if assist_players:
+                assists_text = ", ".join(assist_players)
+                event_description = f"{event.source_entity} killed {event.target_entity} (Assists: {assists_text})"
+            else:
+                event_description = f"{event.source_entity} killed {event.target_entity}"
+            
+            # Calculate game time in seconds
+            game_time_seconds = self._calculate_game_time_seconds(event.event_time, match_start_time)
+            
+            # Create timeline event
+            timeline_event = TimelineEvent(
+                match_id=self.match_id,
+                timestamp=event.timestamp,
+                event_time=event.event_time,
+                game_time_seconds=game_time_seconds,
+                event_type="PlayerKill",
+                event_category="Combat",
+                importance=importance,
+                event_description=event_description,
+                entity_name=event.source_entity,
+                target_name=event.target_entity,
+                team_id=killer_team_id,
+                location_x=event.location_x or 0.0,
+                location_y=event.location_y or 0.0,
+                value=1,  # 1 kill
+                other_entities=",".join(assist_players) if assist_players else None
+            )
+            timeline_events.append(timeline_event)
+            
+        return timeline_events 
+
+    def _generate_objective_timeline_events(self, session: Session, match_start_time):
+        """Generate timeline events for objectives (towers, phoenixes, titans, jungle bosses).
+        
+        Args:
+            session: Database session
+            match_start_time: Match start timestamp
+            
+        Returns:
+            List of timeline events
+        """
+        timeline_events = []
+        
+        # Define important objectives
+        structure_keywords = ['Tower', 'Phoenix', 'Titan']
+        jungle_boss_keywords = ['Gold Fury', 'Fire Giant', 'Pyromancer', 'Bull Demon']
+        
+        # 1. Look for structure destruction events in combat events
+        structure_events = session.query(CombatEvent).filter(
+            CombatEvent.match_id == self.match_id,
+            (CombatEvent.event_type == "Kill") | (CombatEvent.event_type == "KillingBlow"),
+            CombatEvent.source_entity.in_(self.player_names)
+        ).filter(
+            # Use SQL LIKE for each structure keyword
+            or_(
+                *[CombatEvent.target_entity.like(f'%{keyword}%') for keyword in structure_keywords]
+            )
+        ).all()
+        
+        for event in structure_events:
+            # Determine objective type and set importance
+            importance = 5  # Default importance
+            event_type = "Unknown"
+            
+            if "Tower" in event.target_entity:
+                event_type = "TowerDestroyed"
+                importance = 6
+            elif "Phoenix" in event.target_entity:
+                event_type = "PhoenixDestroyed"
+                importance = 8
+            elif "Titan" in event.target_entity:
+                event_type = "TitanKilled"
+                importance = 10  # Highest importance - match ending event
+            
+            # Determine team of structure
+            objective_team = None
+            if "Order" in event.target_entity:
+                objective_team = 1
+            elif "Chaos" in event.target_entity:
+                objective_team = 2
+            
+            # Get attacker team
+            attacker_team = None
+            player = session.query(Player).filter_by(
+                match_id=self.match_id,
+                player_name=event.source_entity
+            ).first()
+            if player:
+                attacker_team = player.team_id
+                
+            # Calculate game time in seconds
+            game_time_seconds = self._calculate_game_time_seconds(event.event_time, match_start_time)
+            
+            # Create event description
+            if objective_team and attacker_team:
+                if objective_team != attacker_team:
+                    team_desc = "enemy" if objective_team != attacker_team else "friendly"
+                    event_description = f"{event.source_entity} destroyed {team_desc} {event.target_entity}"
+                else:
+                    event_description = f"{event.source_entity} destroyed {event.target_entity}"
+            else:
+                event_description = f"{event.source_entity} destroyed {event.target_entity}"
+            
+            # Create timeline event
+            timeline_event = TimelineEvent(
+                match_id=self.match_id,
+                timestamp=event.timestamp,
+                event_time=event.event_time,
+                game_time_seconds=game_time_seconds,
+                event_type=event_type,
+                event_category="Objective",
+                importance=importance,
+                event_description=event_description,
+                entity_name=event.source_entity,
+                target_name=event.target_entity,
+                team_id=attacker_team,
+                location_x=event.location_x or 0.0,
+                location_y=event.location_y or 0.0,
+                value=importance  # Use importance as value
+            )
+            timeline_events.append(timeline_event)
+        
+        # 2. Look for jungle boss kills
+        jungle_boss_events = session.query(CombatEvent).filter(
+            CombatEvent.match_id == self.match_id,
+            (CombatEvent.event_type == "Kill") | (CombatEvent.event_type == "KillingBlow"),
+            CombatEvent.source_entity.in_(self.player_names)
+        ).filter(
+            # Use SQL LIKE for each jungle boss keyword
+            or_(
+                *[CombatEvent.target_entity.like(f'%{keyword}%') for keyword in jungle_boss_keywords]
+            )
+        ).all()
+        
+        for event in jungle_boss_events:
+            # Determine boss type and set importance
+            importance = 7  # Default importance for jungle objectives
+            event_type = "JungleBossKilled"
+            
+            if "Gold Fury" in event.target_entity:
+                event_type = "GoldFuryKilled"
+                importance = 7
+            elif "Fire Giant" in event.target_entity:
+                event_type = "FireGiantKilled"
+                importance = 9
+            elif "Pyromancer" in event.target_entity:
+                event_type = "PyromancerKilled"
+                importance = 6
+            elif "Bull Demon" in event.target_entity:
+                event_type = "BullDemonKilled"
+                importance = 7
+            
+            # Get attacker team
+            attacker_team = None
+            player = session.query(Player).filter_by(
+                match_id=self.match_id,
+                player_name=event.source_entity
+            ).first()
+            if player:
+                attacker_team = player.team_id
+                
+            # Calculate game time in seconds
+            game_time_seconds = self._calculate_game_time_seconds(event.event_time, match_start_time)
+            
+            # Create timeline event
+            timeline_event = TimelineEvent(
+                match_id=self.match_id,
+                timestamp=event.timestamp,
+                event_time=event.event_time,
+                game_time_seconds=game_time_seconds,
+                event_type=event_type,
+                event_category="Objective",
+                importance=importance,
+                event_description=f"{event.source_entity} defeated {event.target_entity}",
+                entity_name=event.source_entity,
+                target_name=event.target_entity,
+                team_id=attacker_team,
+                location_x=event.location_x or 0.0,
+                location_y=event.location_y or 0.0,
+                value=importance  # Use importance as value
+            )
+            timeline_events.append(timeline_event)
+        
+        # 3. Look for explicit objective events in reward events
+        objective_rewards = session.query(RewardEvent).filter(
+            RewardEvent.match_id == self.match_id
+        ).filter(
+            (RewardEvent.event_type == "ObjectiveComplete") |
+            (RewardEvent.event_type == "Structure") |
+            (RewardEvent.event_type.like("%Objective%"))
+        ).all()
+        
+        for event in objective_rewards:
+            # Calculate game time in seconds
+            game_time_seconds = self._calculate_game_time_seconds(event.event_time, match_start_time)
+            
+            source_description = event.source_type or "Unknown"
+            
+            # Create timeline event
+            timeline_event = TimelineEvent(
+                match_id=self.match_id,
+                timestamp=event.timestamp,
+                event_time=event.event_time,
+                game_time_seconds=game_time_seconds,
+                event_type="ObjectiveReward",
+                event_category="Objective",
+                importance=6,
+                event_description=f"{event.entity_name} completed objective: {source_description}",
+                entity_name=event.entity_name,
+                location_x=event.location_x or 0.0,
+                location_y=event.location_y or 0.0,
+                value=event.reward_amount or 0
+            )
+            timeline_events.append(timeline_event)
+        
+        return timeline_events 
+
+    def _generate_economy_timeline_events(self, session: Session, match_start_time):
+        """Generate timeline events for economy (item purchases, gold spikes).
+        
+        Args:
+            session: Database session
+            match_start_time: Match start timestamp
+            
+        Returns:
+            List of timeline events
+        """
+        timeline_events = []
+        
+        # Define important item thresholds for different stages of the game
+        early_game_threshold = 700   # Early game important items
+        mid_game_threshold = 900     # Mid game important items
+        late_game_threshold = 1200   # Late game important items
+        
+        # 1. Track significant item purchases
+        item_events = session.query(ItemEvent).filter(
+            ItemEvent.match_id == self.match_id,
+            ItemEvent.event_type == "ItemPurchase"
+        ).order_by(ItemEvent.event_time).all()
+        
+        # Track player's item build progression
+        player_item_counts = {player: 0 for player in self.player_names}
+        player_item_totals = {player: 0 for player in self.player_names}
+        player_build_stage = {player: "early" for player in self.player_names}
+        
+        for event in item_events:
+            if event.player_name not in self.player_names:
+                continue
+                
+            player = event.player_name
+            item_cost = event.cost or 0
+            player_item_counts[player] = player_item_counts.get(player, 0) + 1
+            player_item_totals[player] = player_item_totals.get(player, 0) + item_cost
+            
+            # Determine importance based on item cost and game stage
+            importance = 3  # Default low importance
+            
+            # Update player's game stage based on total items purchased
+            if player_item_counts[player] >= 12:
+                player_build_stage[player] = "late"
+            elif player_item_counts[player] >= 6:
+                player_build_stage[player] = "mid"
+                
+            # Adjust thresholds based on game stage
+            threshold = early_game_threshold
+            if player_build_stage[player] == "mid":
+                threshold = mid_game_threshold
+            elif player_build_stage[player] == "late":
+                threshold = late_game_threshold
+                
+            # Only include significant items based on cost and game stage
+            if item_cost >= threshold:
+                # Important items have higher importance
+                if item_cost >= late_game_threshold:
+                    importance = 6
+                elif item_cost >= mid_game_threshold:
+                    importance = 5
+                else:
+                    importance = 4
+                    
+                # Get player team
+                player_team = None
+                player_record = session.query(Player).filter_by(
+                    match_id=self.match_id,
+                    player_name=player
+                ).first()
+                if player_record:
+                    player_team = player_record.team_id
+                    
+                # Calculate game time in seconds
+                game_time_seconds = self._calculate_game_time_seconds(event.event_time, match_start_time)
+                
+                # Create timeline event
+                timeline_event = TimelineEvent(
+                    match_id=self.match_id,
+                    timestamp=event.timestamp,
+                    event_time=event.event_time,
+                    game_time_seconds=game_time_seconds,
+                    event_type="ItemPurchase",
+                    event_category="Economy",
+                    importance=importance,
+                    event_description=f"{player} purchased {event.item_name} ({item_cost} gold)",
+                    entity_name=player,
+                    team_id=player_team,
+                    location_x=event.location_x or 0.0,
+                    location_y=event.location_y or 0.0,
+                    value=item_cost
+                )
+                timeline_events.append(timeline_event)
+        
+        # 2. Track gold spike events from reward events
+        reward_events = session.query(RewardEvent).filter(
+            RewardEvent.match_id == self.match_id,
+            RewardEvent.source_type == "gold",
+            RewardEvent.reward_amount >= 200  # Only significant gold rewards
+        ).all()
+        
+        for event in reward_events:
+            if not event.event_text or not any(player in event.event_text for player in self.player_names):
+                continue
+                
+            # Extract player name from event text (might need to be improved)
+            player_name = None
+            for player in self.player_names:
+                if player in event.event_text:
+                    player_name = player
+                    break
+                    
+            if not player_name:
+                continue
+                
+            # Get player team
+            player_team = None
+            player_record = session.query(Player).filter_by(
+                match_id=self.match_id,
+                player_name=player_name
+            ).first()
+            if player_record:
+                player_team = player_record.team_id
+                
+            # Calculate game time in seconds
+            game_time_seconds = self._calculate_game_time_seconds(event.event_time, match_start_time)
+            
+            # Create timeline event for significant gold rewards
+            if event.reward_amount >= 500:
+                importance = 5  # High gold spike
+            else:
+                importance = 4  # Medium gold spike
+                
+            # Create timeline event
+            timeline_event = TimelineEvent(
+                match_id=self.match_id,
+                timestamp=event.timestamp,
+                event_time=event.event_time,
+                game_time_seconds=game_time_seconds,
+                event_type="GoldReward",
+                event_category="Economy",
+                importance=importance,
+                event_description=f"{player_name} received {event.reward_amount} gold",
+                entity_name=player_name,
+                team_id=player_team,
+                location_x=event.location_x or 0.0,
+                location_y=event.location_y or 0.0,
+                value=event.reward_amount
+            )
+            timeline_events.append(timeline_event)
+        
+        return timeline_events 
+
+    def _generate_combat_timeline_events(self, session: Session, match_start_time):
+        """Generate timeline events for significant combat events.
+        
+        Args:
+            session: Database session
+            match_start_time: Match start timestamp
+            
+        Returns:
+            List of timeline events
+        """
+        timeline_events = []
+        
+        # Define thresholds for significant damage
+        high_damage_threshold = 300
+        
+        # 1. High damage events between players
+        high_damage_events = session.query(CombatEvent).filter(
+            CombatEvent.match_id == self.match_id,
+            CombatEvent.event_type.in_(["Damage", "CritDamage"]),
+            CombatEvent.source_entity.in_(self.player_names),
+            CombatEvent.target_entity.in_(self.player_names),
+            CombatEvent.damage_amount >= high_damage_threshold
+        ).order_by(CombatEvent.event_time).all()
+        
+        for event in high_damage_events:
+            # Get player team
+            source_team = None
+            player = session.query(Player).filter_by(
+                match_id=self.match_id,
+                player_name=event.source_entity
+            ).first()
+            if player:
+                source_team = player.team_id
+            
+            # Calculate importance based on damage amount
+            if event.damage_amount >= 500:
+                importance = 6  # Very high damage
+            elif event.damage_amount >= 400:
+                importance = 5  # High damage
+            else:
+                importance = 4  # Significant damage
+            
+            # Calculate game time in seconds
+            game_time_seconds = self._calculate_game_time_seconds(event.event_time, match_start_time)
+            
+            # Create event description with damage mitigation detail
+            mitigation_text = ""
+            if event.damage_mitigated and event.damage_mitigated > 0:
+                mitigation_text = f" ({event.damage_mitigated} mitigated)"
+                
+            event_description = f"{event.source_entity} hit {event.target_entity} for {event.damage_amount} damage{mitigation_text} using {event.ability_name}"
+            
+            # Create timeline event
+            timeline_event = TimelineEvent(
+                match_id=self.match_id,
+                timestamp=event.timestamp,
+                event_time=event.event_time,
+                game_time_seconds=game_time_seconds,
+                event_type="HighDamage",
+                event_category="Combat",
+                importance=importance,
+                event_description=event_description,
+                entity_name=event.source_entity,
+                target_name=event.target_entity,
+                team_id=source_team,
+                location_x=event.location_x or 0.0,
+                location_y=event.location_y or 0.0,
+                value=event.damage_amount
+            )
+            timeline_events.append(timeline_event)
+            
+        # 2. Significant healing events
+        high_healing_threshold = 200
+        healing_events = session.query(CombatEvent).filter(
+            CombatEvent.match_id == self.match_id,
+            CombatEvent.event_type == "Healing",
+            CombatEvent.source_entity.in_(self.player_names),
+            CombatEvent.damage_amount >= high_healing_threshold
+        ).order_by(CombatEvent.event_time).all()
+        
+        for event in healing_events:
+            # Get player team
+            source_team = None
+            player = session.query(Player).filter_by(
+                match_id=self.match_id,
+                player_name=event.source_entity
+            ).first()
+            if player:
+                source_team = player.team_id
+            
+            # Calculate importance based on healing amount
+            if event.damage_amount >= 400:
+                importance = 5  # Very high healing
+            elif event.damage_amount >= 300:
+                importance = 4  # High healing
+            else:
+                importance = 3  # Significant healing
+            
+            # Calculate game time in seconds
+            game_time_seconds = self._calculate_game_time_seconds(event.event_time, match_start_time)
+            
+            # Create event description
+            target_text = event.target_entity if event.target_entity else "themselves"
+            ability_text = f" using {event.ability_name}" if event.ability_name else ""
+            event_description = f"{event.source_entity} healed {target_text} for {event.damage_amount}{ability_text}"
+            
+            # Create timeline event
+            timeline_event = TimelineEvent(
+                match_id=self.match_id,
+                timestamp=event.timestamp,
+                event_time=event.event_time,
+                game_time_seconds=game_time_seconds,
+                event_type="SignificantHealing",
+                event_category="Combat",
+                importance=importance,
+                event_description=event_description,
+                entity_name=event.source_entity,
+                target_name=event.target_entity,
+                team_id=source_team,
+                location_x=event.location_x or 0.0,
+                location_y=event.location_y or 0.0,
+                value=event.damage_amount
+            )
+            timeline_events.append(timeline_event)
+            
+        return timeline_events 
+
+    def _generate_team_fight_timeline_events(self, session: Session, match_start_time):
+        """Generate timeline events for team fights.
+        
+        Args:
+            session: Database session
+            match_start_time: Match start timestamp
+            
+        Returns:
+            List of timeline events
+        """
+        timeline_events = []
+        
+        # Get all combat events involving players
+        combat_events = session.query(CombatEvent).filter(
+            CombatEvent.match_id == self.match_id,
+            CombatEvent.event_type.in_(["Damage", "CritDamage", "KillingBlow", "Kill"]),
+            CombatEvent.source_entity.in_(self.player_names),
+            CombatEvent.target_entity.in_(self.player_names)
+        ).order_by(CombatEvent.event_time).all()
+        
+        if not combat_events:
+            return timeline_events
+        
+        # Parameters for team fight detection
+        team_fight_cooldown = 15  # seconds between combat events to consider part of same team fight
+        min_participants = 4      # minimum number of unique players to consider a team fight
+        min_team_representation = 2  # minimum players from each team
+        
+        # Track team fights
+        current_fight = {
+            'start_time': None,
+            'end_time': None,
+            'participants': set(),
+            'team1_participants': set(),
+            'team2_participants': set(),
+            'kills': 0,
+            'total_damage': 0,
+            'events': []
+        }
+        
+        team_fights = []
+        player_teams = {}
+        
+        # Get player team mappings
+        for player_name in self.player_names:
+            player = session.query(Player).filter_by(
+                match_id=self.match_id,
+                player_name=player_name
+            ).first()
+            if player:
+                player_teams[player_name] = player.team_id
+        
+        # Process combat events to identify team fights
+        for i, event in enumerate(combat_events):
+            source_team = player_teams.get(event.source_entity)
+            target_team = player_teams.get(event.target_entity)
+            
+            # Skip events where we can't determine teams
+            if not source_team or not target_team:
+                continue
+                
+            # Skip friendly fire (same team)
+            if source_team == target_team:
+                continue
+            
+            # Extract damage amount
+            damage_amount = event.damage_amount or 0
+            
+            # If no active fight or this event is too far after the last one, start a new fight
+            if (current_fight['end_time'] is None or 
+                (event.event_time - current_fight['end_time']).total_seconds() > team_fight_cooldown):
+                
+                # If we had a previous fight with enough participants, save it
+                if (current_fight['end_time'] is not None and 
+                    len(current_fight['participants']) >= min_participants and
+                    len(current_fight['team1_participants']) >= min_team_representation and
+                    len(current_fight['team2_participants']) >= min_team_representation):
+                    
+                    team_fights.append(current_fight)
+                
+                # Start a new fight
+                current_fight = {
+                    'start_time': event.event_time,
+                    'end_time': event.event_time,
+                    'participants': {event.source_entity, event.target_entity},
+                    'team1_participants': {event.source_entity} if source_team == 1 else {event.target_entity} if target_team == 1 else set(),
+                    'team2_participants': {event.source_entity} if source_team == 2 else {event.target_entity} if target_team == 2 else set(),
+                    'kills': 1 if event.event_type in ["KillingBlow", "Kill"] else 0,
+                    'total_damage': damage_amount,
+                    'events': [event]
+                }
+            else:
+                # Continue the current fight
+                current_fight['end_time'] = event.event_time
+                current_fight['participants'].add(event.source_entity)
+                current_fight['participants'].add(event.target_entity)
+                
+                # Add to team participants
+                if source_team == 1:
+                    current_fight['team1_participants'].add(event.source_entity)
+                elif source_team == 2:
+                    current_fight['team2_participants'].add(event.source_entity)
+                    
+                if target_team == 1:
+                    current_fight['team1_participants'].add(event.target_entity)
+                elif target_team == 2:
+                    current_fight['team2_participants'].add(event.target_entity)
+                
+                # Update fight stats
+                if event.event_type in ["KillingBlow", "Kill"]:
+                    current_fight['kills'] += 1
+                current_fight['total_damage'] += damage_amount
+                current_fight['events'].append(event)
+        
+        # Add the last fight if it qualifies
+        if (current_fight['end_time'] is not None and 
+            len(current_fight['participants']) >= min_participants and
+            len(current_fight['team1_participants']) >= min_team_representation and
+            len(current_fight['team2_participants']) >= min_team_representation):
+            
+            team_fights.append(current_fight)
+        
+        # Create timeline events for team fights
+        for i, fight in enumerate(team_fights):
+            # Calculate game time in seconds
+            start_game_time = self._calculate_game_time_seconds(fight['start_time'], match_start_time)
+            end_game_time = self._calculate_game_time_seconds(fight['end_time'], match_start_time)
+            
+            # Calculate duration
+            duration_seconds = (fight['end_time'] - fight['start_time']).total_seconds()
+            
+            # Determine the outcome and importance
+            fight_size = len(fight['participants'])
+            importance = min(9, 5 + (fight_size // 2))  # Base importance on number of participants
+            
+            # Adjust importance based on kills
+            if fight['kills'] >= 3:
+                importance = min(10, importance + 1)
+            
+            # Create fight description
+            team1_count = len(fight['team1_participants'])
+            team2_count = len(fight['team2_participants'])
+            
+            event_description = f"Team fight: {team1_count} vs {team2_count} players for {int(duration_seconds)} seconds"
+            if fight['kills'] > 0:
+                event_description += f" with {fight['kills']} kill{'s' if fight['kills'] > 1 else ''}"
+            
+            # Create timeline event
+            timeline_event = TimelineEvent(
+                match_id=self.match_id,
+                timestamp=fight['start_time'],
+                event_time=fight['start_time'],
+                game_time_seconds=start_game_time,
+                event_type="TeamFight",
+                event_category="Combat",
+                importance=importance,
+                event_description=event_description,
+                entity_name=", ".join(list(fight['participants'])[:3]) + ("..." if len(fight['participants']) > 3 else ""),
+                value=int(duration_seconds),
+                other_entities=", ".join(fight['participants'])
+            )
+            timeline_events.append(timeline_event)
+            
+        return timeline_events 
+
+    def _generate_milestone_timeline_events(self, session: Session, match_start_time):
+        """Generate timeline events for player milestones.
+        
+        Args:
+            session: Database session
+            match_start_time: Match start timestamp
+            
+        Returns:
+            List of timeline events
+        """
+        timeline_events = []
+        
+        # Track important milestones:
+        # 1. First blood
+        # 2. First item completion for each player
+        # 3. Level milestones (level 5, 10, 15, 20)
+        # 4. Kill streaks (3, 5, 7, 10)
+        
+        # 1. First blood
+        first_kill = session.query(CombatEvent).filter(
+            CombatEvent.match_id == self.match_id,
+            CombatEvent.event_type.in_(["Kill", "KillingBlow"]),
+            CombatEvent.source_entity.in_(self.player_names),
+            CombatEvent.target_entity.in_(self.player_names)
+        ).order_by(CombatEvent.event_time).first()
+        
+        if first_kill:
+            # Get player team
+            source_team = None
+            player = session.query(Player).filter_by(
+                match_id=self.match_id,
+                player_name=first_kill.source_entity
+            ).first()
+            if player:
+                source_team = player.team_id
+            
+            # Calculate game time in seconds
+            game_time_seconds = self._calculate_game_time_seconds(first_kill.event_time, match_start_time)
+            
+            # Create event description
+            event_description = f"First Blood! {first_kill.source_entity} killed {first_kill.target_entity}"
+            
+            # Create timeline event
+            timeline_event = TimelineEvent(
+                match_id=self.match_id,
+                timestamp=first_kill.timestamp,
+                event_time=first_kill.event_time,
+                game_time_seconds=game_time_seconds,
+                event_type="FirstBlood",
+                event_category="Milestone",
+                importance=8,  # First blood is important!
+                event_description=event_description,
+                entity_name=first_kill.source_entity,
+                target_name=first_kill.target_entity,
+                team_id=source_team
+            )
+            timeline_events.append(timeline_event)
+        
+        # 2. First item completion for each player
+        for player_name in self.player_names:
+            first_item = session.query(ItemEvent).filter(
+                ItemEvent.match_id == self.match_id,
+                ItemEvent.player_name == player_name,
+                ItemEvent.event_type == "ItemPurchase",
+                ItemEvent.cost > 500  # Only consider significant items (not consumables)
+            ).order_by(ItemEvent.event_time).first()
+            
+            if first_item:
+                # Get player team
+                source_team = None
+                player = session.query(Player).filter_by(
+                    match_id=self.match_id,
+                    player_name=player_name
+                ).first()
+                if player:
+                    source_team = player.team_id
+                
+                # Calculate game time in seconds
+                game_time_seconds = self._calculate_game_time_seconds(first_item.event_time, match_start_time)
+                
+                # Create event description
+                event_description = f"{player_name} completed first major item: {first_item.item_name} for {first_item.cost} gold"
+                
+                # Create timeline event
+                timeline_event = TimelineEvent(
+                    match_id=self.match_id,
+                    timestamp=first_item.timestamp,
+                    event_time=first_item.event_time,
+                    game_time_seconds=game_time_seconds,
+                    event_type="FirstItem",
+                    event_category="Milestone",
+                    importance=5,  # Moderate importance
+                    event_description=event_description,
+                    entity_name=player_name,
+                    team_id=source_team,
+                    value=first_item.cost
+                )
+                timeline_events.append(timeline_event)
+        
+        # 3. Level milestones (level 5, 10, 15, 20)
+        important_levels = [5, 10, 15, 20]
+        
+        # Get all level up events
+        level_events = session.query(CombatEvent).filter(
+            CombatEvent.match_id == self.match_id,
+            CombatEvent.event_type == "LevelUp",
+            CombatEvent.source_entity.in_(self.player_names)
+        ).order_by(CombatEvent.event_time).all()
+        
+        # Track player levels
+        player_levels = {player: 1 for player in self.player_names}
+        
+        for event in level_events:
+            player_name = event.source_entity
+            
+            # Skip if not a player
+            if player_name not in self.player_names:
+                continue
+                
+            # Extract level from event text if possible
+            try:
+                level = int(event.event_text.split("level")[1].strip())
+                player_levels[player_name] = level
+            except (IndexError, ValueError, AttributeError):
+                # If we can't extract the level, increment by 1
+                player_levels[player_name] += 1
+                level = player_levels[player_name]
+            
+            # Only create events for important levels
+            if level in important_levels:
+                # Get player team
+                source_team = None
+                player = session.query(Player).filter_by(
+                    match_id=self.match_id,
+                    player_name=player_name
+                ).first()
+                if player:
+                    source_team = player.team_id
+                
+                # Calculate game time in seconds
+                game_time_seconds = self._calculate_game_time_seconds(event.event_time, match_start_time)
+                
+                # Calculate importance based on level
+                importance = 3 + (level // 5)  # Level 5=4, 10=5, 15=6, 20=7
+                
+                # Create event description
+                event_description = f"{player_name} reached level {level}"
+                
+                # Create timeline event
+                timeline_event = TimelineEvent(
+                    match_id=self.match_id,
+                    timestamp=event.timestamp,
+                    event_time=event.event_time,
+                    game_time_seconds=game_time_seconds,
+                    event_type="LevelMilestone",
+                    event_category="Milestone",
+                    importance=importance,
+                    event_description=event_description,
+                    entity_name=player_name,
+                    team_id=source_team,
+                    value=level
+                )
+                timeline_events.append(timeline_event)
+        
+        # 4. Kill streaks (3, 5, 7, 10)
+        important_streaks = [3, 5, 7, 10]
+        player_kill_streaks = {player: 0 for player in self.player_names}
+        player_streak_events = {player: {} for player in self.player_names}
+        
+        # Get all kill events in order
+        kill_events = session.query(CombatEvent).filter(
+            CombatEvent.match_id == self.match_id,
+            CombatEvent.event_type.in_(["Kill", "KillingBlow"]),
+            CombatEvent.source_entity.in_(self.player_names)
+        ).order_by(CombatEvent.event_time).all()
+        
+        # Process the events to track streaks
+        for event in kill_events:
+            killer = event.source_entity
+            victim = event.target_entity
+            
+            # Only count player kills
+            if victim not in self.player_names:
+                continue
+                
+            # Increment the killer's streak
+            player_kill_streaks[killer] += 1
+            current_streak = player_kill_streaks[killer]
+            
+            # Check if the streak is important
+            if current_streak in important_streaks:
+                # Get player team
+                source_team = None
+                player = session.query(Player).filter_by(
+                    match_id=self.match_id,
+                    player_name=killer
+                ).first()
+                if player:
+                    source_team = player.team_id
+                
+                # Calculate game time in seconds
+                game_time_seconds = self._calculate_game_time_seconds(event.event_time, match_start_time)
+                
+                # Calculate importance based on streak
+                importance = 4 + (current_streak // 3)  # 3=5, 5=6, 7=7, 10=8
+                
+                # Create event description
+                event_description = f"{killer} is on a {current_streak}-player kill streak!"
+                
+                # Create timeline event
+                timeline_event = TimelineEvent(
+                    match_id=self.match_id,
+                    timestamp=event.timestamp,
+                    event_time=event.event_time,
+                    game_time_seconds=game_time_seconds,
+                    event_type="KillStreak",
+                    event_category="Milestone",
+                    importance=importance,
+                    event_description=event_description,
+                    entity_name=killer,
+                    team_id=source_team,
+                    value=current_streak
+                )
+                timeline_events.append(timeline_event)
+                
+                # Store this streak event
+                player_streak_events[killer][current_streak] = timeline_event
+            
+            # Reset the victim's streak and check if they had a streak
+            prev_streak = player_kill_streaks[victim]
+            player_kill_streaks[victim] = 0
+            
+            # Check if the victim had an important streak that was ended
+            if prev_streak >= 3:
+                # Find the highest streak event that was recorded
+                highest_streak = 0
+                for streak in important_streaks:
+                    if streak <= prev_streak and streak in player_streak_events[victim]:
+                        highest_streak = streak
+                
+                if highest_streak > 0:
+                    # Get the streak event
+                    streak_event = player_streak_events[victim][highest_streak]
+                    
+                    # Get player team
+                    source_team = None
+                    player = session.query(Player).filter_by(
+                        match_id=self.match_id,
+                        player_name=killer
+                    ).first()
+                    if player:
+                        source_team = player.team_id
+                    
+                    # Calculate game time in seconds
+                    game_time_seconds = self._calculate_game_time_seconds(event.event_time, match_start_time)
+                    
+                    # Calculate importance based on ended streak
+                    importance = 4 + (prev_streak // 3)  # Similar to starting a streak
+                    
+                    # Create event description
+                    event_description = f"{killer} ended {victim}'s {prev_streak}-player kill streak!"
+                    
+                    # Create timeline event
+                    timeline_event = TimelineEvent(
+                        match_id=self.match_id,
+                        timestamp=event.timestamp,
+                        event_time=event.event_time,
+                        game_time_seconds=game_time_seconds,
+                        event_type="KillStreakEnded",
+                        event_category="Milestone",
+                        importance=importance,
+                        event_description=event_description,
+                        entity_name=killer,
+                        target_name=victim,
+                        team_id=source_team,
+                        value=prev_streak,
+                        related_event_id=streak_event.id if hasattr(streak_event, 'id') else None
+                    )
+                    timeline_events.append(timeline_event)
+        
+        return timeline_events 
