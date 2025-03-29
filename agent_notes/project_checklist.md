@@ -63,4 +63,39 @@
 - [x] Fix the timestamp format parsing in the `parse_timestamp` function to properly handle log file formats `YYYY.MM.DD-HH.MM.SS` (2025.03.19-04.09.28)
 - [x] Fix null field issues in the database (match_id, timestamp, location_x, location_y)
 - [x] Fix inconsistent timestamp/event_time field usage across transformers
-- [ ] Handle malformed JSON in log files - currently gets warning but could be improved 
+- [ ] Handle malformed JSON in log files - currently gets warning but could be improved
+
+## Parser Fixes and Improvements
+- [x] Update parser to extract god information from log files
+- [x] Fix item cost extraction
+- [x] Implement match metadata extraction
+- [x] Fix player event location data issues
+- [x] Fix assist calculation in player statistics
+- [x] Update timeline generation to include KillingBlow events
+- [ ] Improve entity team_id assignment for jungle camps and objectives
+
+## Schema and Data Model Enhancement
+- [x] Create database schema for Smite combat log data
+- [x] Define models for matches, players, entities, and events
+- [x] Implement transformers for different event types
+- [ ] Add indexing for performance optimization
+- [ ] Add views for common query patterns
+
+## Testing and Validation
+- [x] Create test script to verify database integrity
+- [x] Validate player statistics calculation
+- [x] Test timeline event generation
+- [ ] Create comprehensive test suite with multiple log files
+- [ ] Implement performance testing for large log files
+
+## Visualization and Analysis
+- [ ] Create Streamlit app for log analysis
+- [ ] Implement interactive visualizations of player performance
+- [ ] Add timeline visualization for match events
+- [ ] Create damage/healing/mitigation breakdowns by player
+
+## Documentation
+- [x] Document fixed issues in notebook.md
+- [x] Keep project_checklist.md updated
+- [ ] Create comprehensive API documentation
+- [ ] Add usage examples for common analysis scenarios 

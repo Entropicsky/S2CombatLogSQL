@@ -166,4 +166,38 @@ These issues were fixed by:
 3. Ensuring `match_id` is set in all event processors
 4. Making timeline event generation consistent
 
-Additionally, we created comprehensive tests to ensure these fields are properly populated in the future. 
+Additionally, we created comprehensive tests to ensure these fields are properly populated in the future.
+
+# Development Notes
+
+## Fixed Issues
+
+### Assist Calculation
+- Implemented a more accurate assist calculation system that properly tracks player contributions to kills
+- The system now tracks damage dealt to each player with timestamps
+- Assists are awarded to players who dealt significant damage (>= 50) to a victim within 10 seconds before their death
+- This calculation takes place in the `_calculate_player_stats` method in `smite_parser/parser.py`
+- Testing confirms both kills/deaths (70 total each) and assists (80 total) are correctly calculated
+
+### KillingBlow Events
+- Updated the parser to properly account for both "Kill" and "KillingBlow" events
+- Timeline now includes all player kill events
+- Player statistics (kills/deaths) are accurate
+
+### Item Cost Extraction
+- Item costs are now correctly extracted from item purchase events
+- Costs are displayed in the format "Item Name (cost)"
+
+### Player Location Data
+- Added default spawn locations when location data is missing
+- Order team (1): (-10500.0, 0.0)
+- Chaos team (2): (10500.0, 0.0)
+
+### Match Metadata
+- Implemented extraction of match metadata including map name and match type
+- Match ID is derived from the log file name when not available in the log
+
+## Performance Notes
+- The parser successfully processes large log files with thousands of events
+- Database operations are batched for efficiency
+- Timeline generation focuses on significant events to prevent overwhelming the database 

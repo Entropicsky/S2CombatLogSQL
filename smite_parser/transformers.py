@@ -186,7 +186,20 @@ def transform_item_event(event: Dict[str, Any]) -> Optional[ItemEvent]:
     # Determine event type
     event_type = event.get("type", "ItemPurchase")
     
-    # Extract relevant fields
+    # Extract cost from text if value1 is not available or is zero
+    cost = convert_numeric(event.get("value1"))
+    if cost is None or cost == 0:
+        # Try to extract cost from the text field
+        text = event.get("text", "")
+        if "(" in text and ")" in text:
+            try:
+                # Extract the value between parentheses as the cost
+                cost_text = text.split("(")[-1].split(")")[0]
+                cost = convert_numeric(cost_text)
+            except (IndexError, ValueError):
+                pass
+    
+    # Create item event
     return ItemEvent(
         timestamp=timestamp,
         event_time=timestamp,
@@ -195,7 +208,7 @@ def transform_item_event(event: Dict[str, Any]) -> Optional[ItemEvent]:
         player_name=player_name,
         item_id=event.get("itemid"),
         item_name=event.get("itemname"),
-        cost=convert_numeric(event.get("value1")),
+        cost=cost,
         location_x=location_x,
         location_y=location_y,
         event_text=event.get("text")
@@ -222,19 +235,42 @@ def transform_player_event(event: Dict[str, Any]) -> Optional[PlayerEvent]:
     # Extract player name
     player_name = event.get("sourceowner")
     
-    # Extract location data - use convert_float as locations are floating point values
+    # Extract entity name - for player events, this is often the same as the player
+    entity_name = player_name
+    
+    # Extract event type
+    event_type = event.get("type")
+    
+    # Extract team ID
+    team_id = convert_numeric(event.get("value1"))
+    
+    # Extract location data
     location_x = convert_float(event.get("locationx"))
     location_y = convert_float(event.get("locationy"))
     
-    # Extract relevant fields
+    # For certain event types, provide default spawn locations if missing
+    if (location_x is None or location_y is None) and event_type in ["RoleAssigned", "GodPicked", "GodHovered"]:
+        if team_id == 1:  # Order team
+            location_x = -10500.0
+            location_y = 0.0
+        elif team_id == 2:  # Chaos team
+            location_x = 10500.0
+            location_y = 0.0
+    
+    # Extract value
+    value = event.get("value1")
+    
+    # Create player event
     return PlayerEvent(
         timestamp=timestamp,
         event_time=timestamp,
         match_id=None,  # Will be set by the parser
-        event_type=event.get("type"),
+        event_type=event_type,
         player_name=player_name,
-        entity_name=event.get("targetowner"),
-        value=event.get("value1"),
+        entity_name=entity_name,  # Use player name as entity name
+        team_id=team_id,
+        value=value,
+        item_id=convert_numeric(event.get("itemid")),
         item_name=event.get("itemname"),
         location_x=location_x,
         location_y=location_y,
@@ -275,13 +311,74 @@ def extract_assists(event: Dict[str, Any], players: List[str]) -> List[str]:
 
 
 def extract_match_data(events: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Extract match metadata from events."""
-    match_data = {}
-    start_event = next((e for e in events if e.get('eventType') == 'start'), None)
+    """Extract match data from events.
     
-    if start_event:
-        match_data['match_id'] = start_event.get('matchID')
-        match_data['log_mode'] = start_event.get('logMode')
+    Args:
+        events: List of events
+        
+    Returns:
+        Dictionary with match data
+    """
+    match_data = {
+        "match_id": None,
+        "map_name": "Unknown Map",  # Default value
+        "game_type": "Unknown Mode",  # Default value
+        "start_time": None,
+        "end_time": None,
+    }
+    
+    # Look for match metadata
+    for event in events:
+        # Check for match ID
+        if "matchid" in event:
+            match_data["match_id"] = event["matchid"]
+        
+        # Check for map name
+        if "mapname" in event:
+            match_data["map_name"] = event["mapname"]
+        elif "map" in event:
+            match_data["map_name"] = event["map"]
+        
+        # Check for game type/mode
+        if "gametype" in event:
+            match_data["game_type"] = event["gametype"]
+        elif "gamemode" in event:
+            match_data["game_type"] = event["gamemode"]
+        elif "gameType" in event:
+            match_data["game_type"] = event["gameType"]
+        
+        # Try to find event timestamps for start/end time
+        if "time" in event:
+            timestamp = parse_timestamp(event["time"])
+            if timestamp:
+                # Update start time if not set or earlier
+                if not match_data["start_time"] or timestamp < match_data["start_time"]:
+                    match_data["start_time"] = timestamp
+                
+                # Update end time if not set or later
+                if not match_data["end_time"] or timestamp > match_data["end_time"]:
+                    match_data["end_time"] = timestamp
+    
+    # Look for map name and game type in event text if not found
+    for event in events:
+        if "text" in event:
+            text = event.get("text", "").lower()
+            
+            # Extract map name from text
+            if match_data["map_name"] == "Unknown Map":
+                map_indicators = ["conquest", "joust", "arena", "assault", "clash", "siege"]
+                for indicator in map_indicators:
+                    if indicator in text:
+                        match_data["map_name"] = indicator.capitalize()
+                        break
+            
+            # Extract game type from text
+            if match_data["game_type"] == "Unknown Mode":
+                mode_indicators = ["casual", "ranked", "custom", "tutorial", "practice"]
+                for indicator in mode_indicators:
+                    if indicator in text:
+                        match_data["game_type"] = indicator.capitalize()
+                        break
     
     return match_data
 

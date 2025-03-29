@@ -2,22 +2,23 @@
 import os
 import json
 import logging
-from datetime import datetime
+import datetime
+from datetime import timedelta
 from typing import Dict, List, Optional, Set, Tuple, Any, Iterator
 from collections import defaultdict
 from tqdm import tqdm
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker, Session
 
 from smite_parser.config.config import ParserConfig
 from smite_parser.models import (
     Base, Match, Player, Entity, CombatEvent, RewardEvent, 
-    ItemEvent, PlayerEvent, PlayerStat, TimelineEvent
+    ItemEvent, PlayerEvent, PlayerStat, TimelineEvent, Item, Ability
 )
 from smite_parser.transformers import (
     transform_combat_event, transform_reward_event,
-    transform_item_event, transform_player_event, parse_timestamp
+    transform_item_event, transform_player_event, parse_timestamp, categorize_entity, extract_match_data
 )
 
 
@@ -46,8 +47,8 @@ class CombatLogParser:
         self.match_id: Optional[str] = None
         self.map_name: Optional[str] = None
         self.game_type: Optional[str] = None
-        self.start_time: Optional[datetime] = None
-        self.end_time: Optional[datetime] = None
+        self.start_time: Optional[datetime.datetime] = None
+        self.end_time: Optional[datetime.datetime] = None
         self.match_info = {}
         
     def parse_file(self, file_path: str) -> bool:
@@ -69,6 +70,9 @@ class CombatLogParser:
             base_name = os.path.basename(file_path)
             source_name = os.path.splitext(base_name)[0]
             
+            # Store source name in match_info
+            self.match_info['source_file'] = source_name
+            
             # Read and parse the log file
             events = self._read_log_file(file_path)
             
@@ -76,13 +80,16 @@ class CombatLogParser:
             self._collect_metadata(events)
             
             # Process events in batches and store in database
-            self._process_events(events, source_name)
+            with self.Session() as session:
+                self._process_events(session, events)
             
             self.logger.info(f"Successfully parsed file: {file_path}")
             return True
             
         except Exception as e:
             self.logger.error(f"Error parsing file {file_path}: {str(e)}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return False
     
     def _reset_metadata(self) -> None:
@@ -185,41 +192,53 @@ class CombatLogParser:
         
         self.logger.info(f"Collected {len(self.player_names)} player names: {self.player_names}")
     
-    def _process_events(self, events: List[Dict[str, Any]], source_name: str) -> None:
+    def _process_events(self, session: Session, events: List[Dict[str, Any]]) -> None:
         """Process events and store in database.
         
         Args:
+            session: Database session
             events: List of parsed events
-            source_name: Source file name
         """
-        with self.Session() as session:
-            # Create match record
-            self.match_id = self.match_id or f"match-{source_name}"
-            match = Match(
-                match_id=self.match_id,
-                map_name=self.map_name,
-                game_type=self.game_type,
-                start_time=self.start_time,
-                end_time=self.end_time,
-                source_file=source_name
-            )
-            session.add(match)
-            session.flush()  # Flush to ensure match_id is available
-            
-            # Create player records
-            self._process_players(session, events)
-            
-            # Create entity records
-            self._process_entities(session)
-            
-            # Process the main event types
-            self._process_event_batches(session, events)
-            
-            # Commit the changes
-            session.commit()
-            
-            # Generate derived data with the committed events
-            self._generate_derived_data()
+        # Extract match metadata
+        match_metadata = extract_match_data(events)
+        
+        # Handle datetime fields for JSON serialization
+        serializable_metadata = {}
+        for key, value in match_metadata.items():
+            if isinstance(value, datetime.datetime):
+                serializable_metadata[key] = value.isoformat()
+            else:
+                serializable_metadata[key] = value
+        
+        # Create match record
+        self.match_id = self.match_id or match_metadata.get('match_id') or f"match-{self.match_info.get('source_file', 'unknown')}"
+        match = Match(
+            match_id=self.match_id,
+            map_name=match_metadata.get('map_name', 'Unknown Map'),
+            game_type=match_metadata.get('game_type', 'Unknown Mode'),
+            start_time=self.start_time,
+            end_time=self.end_time,
+            source_file=self.match_info.get('source_file', 'unknown'),
+            duration_seconds=(self.end_time - self.start_time).total_seconds() if self.start_time and self.end_time else None,
+            match_data=json.dumps(serializable_metadata) if serializable_metadata else None
+        )
+        session.add(match)
+        session.flush()  # Flush to ensure match_id is available
+        
+        # Create player records
+        self._process_players(session, events)
+        
+        # Create entity records
+        self._process_entities(session)
+        
+        # Process the main event types
+        self._process_event_batches(session, events)
+        
+        # Commit the changes
+        session.commit()
+        
+        # Generate derived data with the committed events
+        self._generate_derived_data()
     
     def _process_players(self, session: Session, events: List[Dict[str, Any]]) -> None:
         """Process player data and create player records.
@@ -247,14 +266,26 @@ class CombatLogParser:
                         "role": role_name
                     }
         
+        # Find god information from GodPicked events
+        for event in events:
+            if event.get("eventType") == "playermsg" and event.get("type") == "GodPicked":
+                player_name = event.get("sourceowner")
+                god_name = event.get("itemname")
+                god_id = event.get("itemid")
+                
+                if player_name and (god_name or god_id) and player_name in player_data:
+                    player_data[player_name]["god_name"] = god_name
+                    player_data[player_name]["god_id"] = god_id
+        
         # Create player records
         for player_name, data in player_data.items():
-            self.logger.info(f"Creating player record: {player_name}, Team: {data.get('team_id')}, Role: {data.get('role')}")
+            self.logger.info(f"Creating player record: {player_name}, Team: {data.get('team_id')}, Role: {data.get('role')}, God: {data.get('god_name')}")
             player = Player(
                 match_id=self.match_id,
                 player_name=player_name,
                 team_id=data.get("team_id"),
-                god_name=None,  # We'll update this when we find god info later
+                god_name=data.get("god_name"),
+                god_id=data.get("god_id"),
                 role=data.get("role")
             )
             session.add(player)
@@ -265,11 +296,40 @@ class CombatLogParser:
         Args:
             session: Database session
         """
+        # Get all player names from the session for entity type classification
+        player_names = set()
+        for player in session.query(Player).filter_by(match_id=self.match_id).all():
+            player_names.add(player.player_name)
+        
+        # Process each entity
         for entity_name in self.entity_names:
             if entity_name:
+                # Determine entity type using categorize_entity
+                entity_type = categorize_entity(entity_name, player_names)
+                
+                # Determine team_id based on entity type and name
+                team_id = None
+                if entity_type == 'player':
+                    # For players, get team_id from players table
+                    player = session.query(Player).filter_by(
+                        match_id=self.match_id, 
+                        player_name=entity_name
+                    ).first()
+                    if player:
+                        team_id = player.team_id
+                elif entity_type in ['objective', 'minion']:
+                    # For objectives and minions, determine team from name if possible
+                    lower_name = entity_name.lower()
+                    if 'order' in lower_name:
+                        team_id = 1
+                    elif 'chaos' in lower_name:
+                        team_id = 2
+                
                 entity = Entity(
                     entity_name=entity_name,
-                    match_id=self.match_id
+                    match_id=self.match_id,
+                    entity_type=entity_type,
+                    team_id=team_id
                 )
                 session.add(entity)
     
@@ -297,6 +357,13 @@ class CombatLogParser:
                 item_events.append(event)
             elif event_type == "playermsg":
                 player_events.append(event)
+        
+        # Process items and abilities first to establish references
+        if item_events:
+            self._process_items(session, events)
+        
+        if combat_events:
+            self._process_abilities(session, events)
         
         # Process each event type in batches
         if combat_events:
@@ -479,8 +546,9 @@ class CombatLogParser:
         with self.Session() as session:
             self.logger.debug(f"Generating derived data for match_id={self.match_id}")
             
-            # Calculate player statistics
-            self._generate_player_stats(session)
+            # Calculate player statistics for each player
+            for player_name in self.player_names:
+                self._calculate_player_stats(session, player_name)
             
             # Generate timeline events
             self._generate_timeline_events(session)
@@ -488,65 +556,168 @@ class CombatLogParser:
             # Commit the changes
             session.commit()
     
-    def _generate_player_stats(self, session: Session) -> None:
-        """Generate player stats from events.
+    def _calculate_player_stats(self, session: Session, player_name: str) -> None:
+        """Calculate and store player statistics.
         
         Args:
             session: Database session
+            player_name: Player name
         """
-        # Get all players
-        players = session.query(Player).all()
+        self.logger.info(f"Calculating stats for player: {player_name}")
         
-        for player in players:
-            # Calculate kills, deaths, assists
-            kills = session.query(CombatEvent).filter(
-                CombatEvent.source_entity == player.player_name,
-                CombatEvent.event_type == "Kill"
-            ).count()
+        # Get player record
+        player = session.query(Player).filter_by(
+            match_id=self.match_id, 
+            player_name=player_name
+        ).first()
+        
+        if not player:
+            self.logger.error(f"Player {player_name} not found in database")
+            return
+        
+        # Get combat events involving this player
+        combat_events = session.query(CombatEvent).filter_by(
+            match_id=self.match_id
+        ).filter(
+            # Player is either source or target
+            ((CombatEvent.source_entity == player_name) | 
+             (CombatEvent.target_entity == player_name))
+        ).all()
+        
+        # Initialize stats
+        kills = 0
+        deaths = 0
+        assists = 0
+        damage_dealt = 0
+        damage_taken = 0
+        healing_done = 0
+        cc_time_inflicted = 0
+        
+        # Track already processed kills to avoid double counting
+        processed_kills = set()
+        
+        # Track damage dealt to other players with timestamps
+        # Format: {target_player: [(timestamp, damage)]}
+        damage_to_players = {}
+        
+        # First pass: collect damage dealt to other players and calculate basic stats
+        for event in combat_events:
+            # Player dealt damage
+            if event.source_entity == player_name and event.event_type == "Damage":
+                damage_amount = event.damage_amount or 0
+                damage_dealt += damage_amount
+                
+                # Record damage dealt to other players (for assist calculation)
+                if event.target_entity in self.player_names and event.target_entity != player_name:
+                    if event.target_entity not in damage_to_players:
+                        damage_to_players[event.target_entity] = []
+                    
+                    damage_to_players[event.target_entity].append((event.timestamp, damage_amount))
+                
+            # Player took damage
+            if event.target_entity == player_name and event.event_type == "Damage":
+                damage_taken += event.damage_amount or 0
+                
+            # Player healed
+            if event.source_entity == player_name and event.event_type == "Healing":
+                healing_done += event.damage_amount or 0
+                
+            # Player applied crowd control
+            if event.source_entity == player_name and event.event_type == "CrowdControl":
+                cc_time_inflicted += 1  # We don't have duration, so count instances
+                
+            # Player killed someone (check for both Kill and KillingBlow)
+            if event.source_entity == player_name and (event.event_type == "Kill" or event.event_type == "KillingBlow"):
+                # Only count if the target is another player
+                if event.target_entity in self.player_names:
+                    # Check if this kill was already processed
+                    kill_key = f"{event.timestamp}_{event.target_entity}"
+                    if kill_key not in processed_kills:
+                        kills += 1
+                        processed_kills.add(kill_key)
+                
+            # Player died (check for both Kill and KillingBlow)
+            if event.target_entity == player_name and (event.event_type == "Kill" or event.event_type == "KillingBlow"):
+                if event.source_entity in self.player_names:
+                    deaths += 1
+        
+        # Get all killing blows in the match for assist calculation
+        kill_events = session.query(CombatEvent).filter(
+            CombatEvent.match_id == self.match_id,
+            (CombatEvent.event_type == "Kill") | (CombatEvent.event_type == "KillingBlow"),
+            CombatEvent.source_entity.in_(self.player_names),
+            CombatEvent.target_entity.in_(self.player_names),
+            CombatEvent.source_entity != player_name  # Not kills by this player
+        ).all()
+        
+        # Calculate assists by checking if player dealt damage to victims shortly before their deaths
+        for kill_event in kill_events:
+            killer = kill_event.source_entity
+            victim = kill_event.target_entity
+            kill_time = kill_event.timestamp
             
-            deaths = session.query(CombatEvent).filter(
-                CombatEvent.target_entity == player.player_name,
-                CombatEvent.event_type == "Kill"
-            ).count()
+            # Skip if this player was the killer or victim
+            if player_name == killer or player_name == victim:
+                continue
             
-            assists = session.query(CombatEvent).filter(
-                CombatEvent.source_entity == player.player_name,
-                CombatEvent.event_type == "Assist"
-            ).count()
-            
-            # Calculate total damage dealt
-            damage_dealt = session.query(CombatEvent).filter(
-                CombatEvent.source_entity == player.player_name,
-                CombatEvent.event_type == "Damage"
-            ).with_entities(
-                CombatEvent.damage_amount
-            ).all()
-            
-            total_damage = sum(damage[0] or 0 for damage in damage_dealt)
-            
-            # Calculate total healing done
-            healing_done = session.query(CombatEvent).filter(
-                CombatEvent.source_entity == player.player_name,
-                CombatEvent.event_type == "Heal"
-            ).with_entities(
-                CombatEvent.damage_amount
-            ).all()
-            
-            total_healing = sum(healing[0] or 0 for healing in healing_done)
-            
-            # Create player stat record
-            player_stat = PlayerStat(
+            # Check if player damaged the victim before they died
+            if victim in damage_to_players:
+                # Find damage events within 10 seconds before the kill
+                assist_window = timedelta(seconds=10)
+                recent_damage = [
+                    dmg for ts, dmg in damage_to_players[victim]
+                    if kill_time - assist_window <= ts <= kill_time
+                ]
+                
+                # Award assist if sufficient damage was dealt
+                if sum(recent_damage) >= 50:  # Threshold for meaningful contribution
+                    assists += 1
+        
+        # Get reward events for this player
+        reward_events = session.query(RewardEvent).filter_by(
+            match_id=self.match_id
+        ).all()
+        
+        # Calculate gold and experience
+        gold_earned = 0
+        experience_earned = 0
+        
+        for event in reward_events:
+            # Skip if event text doesn't contain player name
+            if not event.event_text or player_name not in event.event_text:
+                continue
+                
+            if event.source_type == "gold":
+                gold_earned += event.reward_amount or 0
+            elif event.source_type == "experience":
+                experience_earned += event.reward_amount or 0
+        
+        # Create or update player stats
+        stat = session.query(PlayerStat).filter_by(
+            match_id=self.match_id, 
+            player_name=player_name
+        ).first()
+        
+        if not stat:
+            stat = PlayerStat(
                 match_id=self.match_id,
-                player_name=player.player_name,
-                team_id=player.team_id,
-                kills=kills,
-                deaths=deaths,
-                assists=assists,
-                damage_dealt=total_damage,
-                healing_done=total_healing
+                player_name=player_name,
+                team_id=player.team_id
             )
-            
-            session.add(player_stat)
+            session.add(stat)
+        
+        # Update stats
+        stat.kills = kills
+        stat.deaths = deaths
+        stat.assists = assists
+        stat.damage_dealt = damage_dealt
+        stat.damage_taken = damage_taken
+        stat.healing_done = healing_done
+        stat.gold_earned = gold_earned
+        stat.experience_earned = experience_earned
+        stat.cc_time_inflicted = cc_time_inflicted
+        
+        session.commit()
     
     def _generate_timeline_events(self, session: Session) -> None:
         """Generate timeline events from raw events.
@@ -557,10 +728,12 @@ class CombatLogParser:
         timeline_batch = []
         
         # Get major events for the timeline
-        # 1. Kills
+        # 1. Kills (from both Kill and KillingBlow events)
         kill_events = session.query(CombatEvent).filter(
-            CombatEvent.event_type == "Kill",
-            CombatEvent.match_id == self.match_id
+            CombatEvent.match_id == self.match_id,
+            (CombatEvent.event_type == "Kill") | (CombatEvent.event_type == "KillingBlow"),
+            CombatEvent.source_entity.in_(self.player_names),
+            CombatEvent.target_entity.in_(self.player_names)
         ).all()
         
         for event in kill_events:
@@ -672,4 +845,80 @@ class CombatLogParser:
         session.query(Match).filter_by(match_id=match_id).delete()
         
         session.commit()
-        self.logger.info(f"Successfully cleared data for match ID: {match_id}") 
+        self.logger.info(f"Successfully cleared data for match ID: {match_id}")
+
+    def _process_items(self, session: Session, events: List[Dict[str, Any]]) -> None:
+        """Process unique items and create item records.
+        
+        Args:
+            session: Database session
+            events: List of events
+        """
+        # Set to track unique items
+        unique_items = {}
+        
+        # Extract items from item events
+        for event in events:
+            if event.get("eventType") == "itemmsg" and event.get("type") == "ItemPurchase":
+                item_id = event.get("itemid")
+                item_name = event.get("itemname")
+                
+                if item_id and item_name and item_id not in unique_items:
+                    unique_items[item_id] = item_name
+        
+        # Create item records for unique items
+        for item_id, item_name in unique_items.items():
+            try:
+                # Convert item_id to int if it's a string
+                item_id_int = int(item_id)
+                
+                # Determine item type based on name
+                item_type = None
+                lower_name = item_name.lower()
+                
+                if 'relic' in lower_name or 'beads' in lower_name or 'blink' in lower_name or 'shell' in lower_name:
+                    item_type = 'Relic'
+                elif 'potion' in lower_name or 'chalice' in lower_name:
+                    item_type = 'Consumable'
+                else:
+                    item_type = 'Item'  # Default type
+                
+                # Create item record
+                item = Item(
+                    item_id=item_id_int,
+                    item_name=item_name,
+                    item_type=item_type
+                )
+                session.add(item)
+            except (ValueError, TypeError) as e:
+                self.logger.warning(f"Error creating item record for {item_id} - {item_name}: {e}")
+                continue
+
+    def _process_abilities(self, session: Session, events: List[Dict[str, Any]]) -> None:
+        """Process unique abilities and create ability records.
+        
+        Args:
+            session: Database session
+            events: List of events
+        """
+        # Dictionary to track unique abilities by name
+        unique_abilities = {}
+        
+        # Extract abilities from combat events
+        for event in events:
+            if event.get("eventType") == "CombatMsg":
+                ability_name = event.get("itemname")
+                source_entity = event.get("sourceowner")
+                
+                if ability_name and source_entity and ability_name not in unique_abilities:
+                    unique_abilities[ability_name] = source_entity
+        
+        # Create ability records for unique abilities
+        for ability_name, source_entity in unique_abilities.items():
+            # Create ability record
+            ability = Ability(
+                match_id=self.match_id,
+                ability_name=ability_name,
+                ability_source=source_entity
+            )
+            session.add(ability) 

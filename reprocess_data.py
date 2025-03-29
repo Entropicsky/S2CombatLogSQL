@@ -28,76 +28,74 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def reprocess_log(log_file, db_file, batch_size=1000):
-    """Reprocess a log file and update database correctly."""
-    # Configure parser
-    config = ParserConfig(
-        db_path=db_file,
-        batch_size=batch_size,
-        show_progress=True,
-        skip_malformed=True,
-        log_level=logging.INFO,
-    )
-    
-    logger.info(f"Reprocessing log file: {log_file}")
-    logger.info(f"Target database: {db_file}")
-    
-    # Initialize database connection
-    engine = create_engine(f"sqlite:///{db_file}")
-    Session = sessionmaker(bind=engine)
-    
-    # Create parser
-    parser = CombatLogParser(config)
-    
+def reprocess_log(log_file, db_file):
+    """Reprocess a log file and store the results in a database."""
     try:
-        # First get the match IDs from the database
-        with Session() as session:
-            # Check existing matches in DB
-            matches = session.query(Match).all()
-            if not matches:
-                logger.error("No matches found in database")
-                return False
-                
-            logger.info(f"Found {len(matches)} matches in database")
-            for match in matches:
-                logger.info(f"Match ID: {match.match_id}, Source: {match.source_file}")
-                
-                # If this match is related to our log file
-                if match.source_file and Path(match.source_file).stem == Path(log_file).stem:
-                    match_id = match.match_id
-                    logger.info(f"Found matching match ID: {match_id}")
-                    
-                    # Clear existing match data
-                    logger.info(f"Clearing existing data for match ID: {match_id}")
-                    
-                    # Delete data from all tables in the correct order
-                    session.query(TimelineEvent).filter_by(match_id=match_id).delete()
-                    session.query(CombatEvent).filter_by(match_id=match_id).delete()
-                    session.query(RewardEvent).filter_by(match_id=match_id).delete() 
-                    session.query(ItemEvent).filter_by(match_id=match_id).delete()
-                    session.query(PlayerEvent).filter_by(match_id=match_id).delete()
-                    session.query(PlayerStat).filter_by(match_id=match_id).delete()
-                    session.query(Player).filter_by(match_id=match_id).delete()
-                    session.query(Match).filter_by(match_id=match_id).delete()
-                    
-                    session.commit()
-                    logger.info(f"Successfully cleared data for match ID: {match_id}")
-                    break
+        logger.info(f"Reprocessing log file: {log_file}")
+        logger.info(f"Target database: {db_file}")
         
-        # Now parse the whole file again
-        success = parser.parse_file(log_file)
+        # Create the database file if it doesn't exist
+        open(db_file, 'a').close()
         
-        if success:
-            logger.info(f"Successfully reprocessed log file in {db_file}")
-            return True
+        # Generate configuration
+        config = ParserConfig(
+            db_path=db_file,
+            batch_size=1000,
+            skip_malformed=True
+        )
+        
+        # Configure logging
+        configure_logging(config)
+        
+        # Create parser
+        parser = CombatLogParser(config)
+        
+        # First, extract match ID from the log file
+        match_id = None
+        with open(log_file, 'r') as f:
+            for line in f:
+                if '"eventType":"match"' in line.lower():
+                    try:
+                        event = json.loads(line.strip())
+                        match_id = event.get("matchid", "unknown")
+                        logger.info(f"Found match ID: {match_id}")
+                        break
+                    except json.JSONDecodeError:
+                        continue
+        
+        # If match ID found, clear existing match data
+        if match_id:
+            engine = create_engine(f"sqlite:///{db_file}")
+            Session = sessionmaker(bind=engine)
+            with Session() as session:
+                try:
+                    parser.clear_existing_match(session, match_id)
+                    logger.info(f"Cleared existing data for match ID: {match_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to clear existing match: {e}")
         else:
-            logger.error("Failed to reprocess log file")
+            logger.warning("No match ID found in log file. Proceeding without clearing existing data.")
+        
+        # Parse the log file
+        try:
+            success = parser.parse_file(log_file)
+            if not success:
+                logger.error("Parser returned failure")
+                return False
+        except Exception as e:
+            logger.error(f"Parser error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
-            
+        
+        # Verify the data
+        verify_data(db_file)
+        
+        return True
     except Exception as e:
-        logger.error(f"Error during reprocessing: {e}")
+        logger.error(f"Error reprocessing log: {e}")
         import traceback
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
         return False
 
 def verify_data(db_file):

@@ -4,6 +4,22 @@
 
 This project is creating a parser for SMITE 2 Combat Log files that extracts data and stores it in a SQLite database for analysis. The parser handles different event types from the combat log and transforms them into a structured database format.
 
+## Recent Improvements
+
+We've made several significant improvements to the combat log parser:
+
+1. **Assist Calculation**: Implemented a more accurate assist calculation system in `_calculate_player_stats` that tracks damage contributions to kills. Assists are now awarded to players who dealt significant damage to a victim shortly before their death.
+
+2. **KillingBlow Events**: Updated the parser to properly account for both "Kill" and "KillingBlow" events when generating timeline events and calculating player statistics.
+
+3. **Item Cost Extraction**: Fixed item cost extraction from purchase events.
+
+4. **Player Location Data**: Added default spawn locations when actual location data is missing in player events:
+   - Order team (1): (-10500.0, 0.0)
+   - Chaos team (2): (10500.0, 0.0)
+
+5. **Match Metadata**: Implemented extraction of match metadata from log files.
+
 ## Project Structure
 
 - `smite_parser/` - Main package directory
