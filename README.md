@@ -50,19 +50,31 @@ pip install -e .
 
 ## 📊 Usage
 
-### Basic Data Loading
+### Simple Loading (Recommended)
 
-The easiest way to load combat log files is using the `reprocess_data.py` script:
+The easiest way to load combat log files is using the `load.py` script:
 
 ```bash
-# Process a log file into a new database
+# Basic usage - automatically creates a database in ./data/
+python load.py /path/to/CombatLog.log
+
+# Specify output database location
+python load.py /path/to/CombatLog.log -o my_database.db
+
+# Load and verify the data was imported correctly
+python load.py /path/to/CombatLog.log --verify
+
+# Force reload even if match already exists
+python load.py /path/to/CombatLog.log --force
+```
+
+### Advanced Reprocessing
+
+For fixing data issues or reprocessing with advanced options, use `reprocess_data.py`:
+
+```bash
+# Reprocess a log file into a specific database
 python reprocess_data.py /path/to/CombatLog.log /path/to/output.db
-
-# Process and verify data integrity
-python reprocess_data.py /path/to/CombatLog.log /path/to/output.db --verify
-
-# Force reload and overwrite existing data
-python reprocess_data.py /path/to/CombatLog.log /path/to/output.db --force
 ```
 
 ### Testing Parser Functionality
