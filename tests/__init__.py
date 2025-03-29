@@ -1,0 +1,1 @@
+"""Tests for SMITE 2 Combat Log Parser.""" 

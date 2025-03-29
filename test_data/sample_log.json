@@ -1,0 +1,6 @@
+{"eventType": "start", "matchId": "test-match-123", "timestamp": "2025-03-30T10:00:00", "maps": "Conquest", "gametype": "Conquest"}
+{"eventType": "playermsg", "timestamp": "2025-03-30T10:01:00", "player": "TestPlayer1", "team": 1, "god": "Thor", "role": "Jungle", "level": 1}
+{"eventType": "playermsg", "timestamp": "2025-03-30T10:01:05", "player": "TestPlayer2", "team": 2, "god": "Zeus", "role": "Mid", "level": 1}
+{"eventType": "CombatMsg", "timestamp": "2025-03-30T10:05:30", "source": "TestPlayer1", "target": "TestPlayer2", "type": "Damage", "value": 150, "ability": "Mjolnir's Attunement", "locationx": 100.5, "locationy": 200.75}
+{"eventType": "RewardMsg", "timestamp": "2025-03-30T10:06:00", "entity": "TestPlayer1", "type": "Currency", "value": 50, "source": "Minion Kill"}
+{"eventType": "itemmsg", "timestamp": "2025-03-30T10:08:00", "player": "TestPlayer1", "item": "Warrior Tabi", "slot": 1, "value": 800} 

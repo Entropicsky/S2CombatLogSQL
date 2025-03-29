@@ -1,0 +1,10 @@
+{"eventType": "start", "matchID": "test-match-id", "time": "2025.03.19-03.38.15", "map": "Conquest", "gametype": "Conquest"}
+{"eventType": "playermsg", "time": "2025.03.19-03.38.20", "sourceowner": "Player1", "type": "RoleAssigned", "value1": "1", "itemname": "Jungle"}
+{"eventType": "playermsg", "time": "2025.03.19-03.38.21", "sourceowner": "Player2", "type": "RoleAssigned", "value1": "2", "itemname": "Mid"}
+{"eventType": "CombatMsg", "time": "2025.03.19-03.40.00", "sourceowner": "Player1", "targetowner": "Player2", "type": "Damage", "value1": "150", "itemname": "Basic Attack", "locationx": "100.5", "locationy": "200.75"}
+{"eventType": "CombatMsg", "time": "2025.03.19-03.41.00", "sourceowner": "Player1", "targetowner": "Player2", "type": "Kill", "value1": "1", "itemname": "Basic Attack", "locationx": "100.5", "locationy": "200.75"}
+{"eventType": "RewardMsg", "time": "2025.03.19-03.41.10", "sourceowner": "Player1", "type": "Currency", "value1": "50", "itemname": "Kill Reward", "locationx": "100.5", "locationy": "200.75"}
+{"eventType": "RewardMsg", "time": "2025.03.19-03.41.15", "sourceowner": "Player1", "type": "Experience", "value1": "100", "itemname": "Kill XP", "locationx": "100.5", "locationy": "200.75"}
+{"eventType": "itemmsg", "time": "2025.03.19-03.42.00", "sourceowner": "Player1", "type": "ItemPurchase", "value1": "1200", "itemname": "Powerful Item", "locationx": "50.3", "locationy": "75.8"}
+{"eventType": "RewardMsg", "time": "2025.03.19-03.45.00", "sourceowner": "Player1", "type": "ObjectiveComplete", "value1": "500", "itemname": "Tower", "locationx": "300.0", "locationy": "400.0"}
+{"eventType": "CombatMsg", "time": "2025.03.19-04.09.57", "sourceowner": "Player2", "targetowner": "Player1", "type": "Damage", "value1": "200", "itemname": "Ability", "locationx": "150.0", "locationy": "250.0"} 
