@@ -15,14 +15,41 @@ A tool to parse SMITE 2 combat log files and store them in a SQLite database opt
 
 ```bash
 # Clone the repository
-git clone https://github.com/username/smite_parser.git
-cd smite_parser
+git clone https://github.com/Entropicsky/S2CombatLogSQL.git
+cd S2CombatLogSQL
 
-# Install the package
+# Set up a virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
 pip install -e .
 ```
 
 ## Usage
+
+### Simple Loading (Recommended)
+
+The easiest way to load combat log files is using the `load.py` script:
+
+```bash
+# Basic usage - automatically creates a database in ./data/
+python load.py /path/to/CombatLog.log
+
+# Specify output database location
+python load.py /path/to/CombatLog.log -o my_database.db
+
+# Load and verify the data was imported correctly
+python load.py /path/to/CombatLog.log --verify
+
+# Force reload even if match already exists
+python load.py /path/to/CombatLog.log --force
+```
+
+### Advanced Usage
+
+For more advanced use cases, you can use the CLI:
 
 ```bash
 # Parse a combat log file
@@ -33,6 +60,20 @@ smite-parser parse /path/to/CombatLog.log --output smite_matches.db
 
 # Show help
 smite-parser --help
+```
+
+## Querying the Database
+
+After loading your combat log, you can query the database using SQLite:
+
+```bash
+# Open the database
+sqlite3 data/CombatLog.db
+
+# Some example queries:
+sqlite> SELECT * FROM matches;
+sqlite> SELECT player_name, kills, deaths, assists FROM player_stats;
+sqlite> SELECT * FROM timeline_events ORDER BY event_time;
 ```
 
 ## Database Schema
@@ -46,6 +87,7 @@ The database uses a normalized schema with tables for:
 - Item purchases
 - Player-specific events (role assignments, god selection)
 - Derived statistics for analysis
+- Timeline events for key match moments
 
 For detailed schema information, see the technical specification in the `agent_notes` folder.
 
