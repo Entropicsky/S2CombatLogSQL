@@ -10,6 +10,7 @@ from pathlib import Path
 from smite_parser.config.config import ParserConfig
 from smite_parser.parser import CombatLogParser
 from reprocess_data import verify_data
+from scripts.export_to_excel import export_to_excel
 
 def main():
     """Process a combat log file and load it into a SQLite database."""
@@ -19,6 +20,7 @@ def main():
     parser.add_argument("-o", "--output", help="Output database file path (default: auto-generated based on log file name)")
     parser.add_argument("--verify", action="store_true", help="Verify the database after loading")
     parser.add_argument("--force", action="store_true", help="Force reload if match already exists")
+    parser.add_argument("--no-excel", action="store_true", help="Skip exporting to Excel")
     
     args = parser.parse_args()
     
@@ -67,6 +69,15 @@ def main():
         if args.verify:
             print("\nVerifying database contents...")
             verify_data(str(db_path))
+        
+        # Export to Excel
+        if not args.no_excel:
+            try:
+                excel_path = export_to_excel(str(db_path))
+                print(f"Data exported to Excel: {excel_path}")
+            except Exception as e:
+                print(f"Failed to export to Excel: {e}")
+                print("Install required packages with: pip install pandas openpyxl")
             
         print("\nRun the following to query the database:")
         print(f"sqlite3 {db_path}")
