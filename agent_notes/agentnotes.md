@@ -1,196 +1,102 @@
-# Agent Notes: SMITE 2 Combat Log Parser
+# Agent Notes for S2CombatLogSQL Project
 
 ## Project Overview
+This project is a tool for analyzing and visualizing SMITE 2 combat log data. It consists of:
 
-This project is creating a parser for SMITE 2 Combat Log files that extracts data and stores it in a SQLite database for analysis. The parser handles different event types from the combat log and transforms them into a structured database format.
+1. A parser that processes combat log files into a SQLite database
+2. A Streamlit web application that provides interactive visualizations and analysis of the data
+
+## Current Project State
+As of the latest session:
+
+- The SQLite database schema is fully implemented with tables for matches, players, events, etc.
+- The Streamlit application has several functional pages:
+  - Home page with upload functionality
+  - Match Summary page with player performance tables and team comparisons
+  - Items & Builds page with multiple visualizations for item purchases and build paths
+- Testing framework is in place with passing tests
+
+## Key Files and Directories
+
+```
+S2CombatLogSQL/
+├── data/                      # Data storage directory
+├── streamlit/                 # Streamlit application
+│   ├── Home.py                # Home/Upload page
+│   ├── pages/                 # Application pages
+│   │   ├── 1_Match_Summary.py # Match summary page
+│   │   ├── 2_Items_Builds.py  # Items & builds analysis
+│   │   └── ... (other pages)
+│   ├── modules/               # Reusable code modules
+│   │   ├── queries.py         # SQL query functions
+│   │   ├── item_queries.py    # Item-specific SQL queries
+│   │   └── item_visualization.py # Item visualization functions
+│   └── data/                  # App data and static files
+│       └── items_data.json    # Item metadata
+├── smite_parser/              # Combat log parser module
+├── tests/                     # Test scripts
+└── requirements.txt           # Python dependencies
+```
+
+## Important Technical Details
+
+### Database Structure
+The SQLite database has the following key tables:
+- `matches` - General match information
+- `players` - Player details and god selections
+- `player_stats` - Performance statistics
+- `combat_events` - Damage, healing events
+- `item_events` - Item purchase events
+- `timeline_events` - Key events throughout the match
+
+### Item Build Visualizations
+Multiple visualizations have been implemented for item analysis:
+1. Item Purchase Timeline - Shows when items were purchased during the match
+2. Simple Item Sequence - Chronological table of item purchases
+3. Build Path by Category - Visual organization of items by type
+4. Gold Distribution - Analysis of gold spending by item category
+
+### SQL Query Pattern
+Most data access is through SQL queries in the `modules/queries.py` and `modules/item_queries.py` files. These functions accept a database connection and parameters, returning pandas DataFrames.
+
+### DataFrame Handling
+Pandas DataFrames are used extensively. To avoid the SettingWithCopyWarning:
+- Create explicit copies of dataframes before modification: `df_copy = df.copy()`
+- Use proper assignment methods: `.loc[]` for assignment to views
+
+## Outstanding Work
+- Economy Analysis page (gold/XP over time)
+- Combat Analysis page (damage distribution, combat heatmaps)
+- Advanced filtering and comparison features
+
+## Project Checklist
+See `agent_notes/project_checklist.md` for detailed task tracking.
+
+## User Preferences
+- Prefer Streamlit for all visualizations
+- Focus on clean, maintainable code with single responsibility principle
+- Test coverage for all new functionality
+- Keep documentation updated
+
+## Technical Debt
+- Some queries could be optimized for better performance
+- Consider refactoring large files into smaller components
+- Add more robust error handling for edge cases
+
+## Working Environment
+- Python 3.9+
+- Streamlit for web application
+- SQLite for database
+- Pandas for data manipulation
+- Plotly for interactive visualizations
 
 ## Recent Improvements
+- Fixed DataFrame SettingWithCopyWarning issues in Match_Summary.py
+- Implemented multiple item build visualizations
+- Added comprehensive item build analysis capabilities
+- Updated project documentation including README
 
-We've made several significant improvements to the combat log parser:
-
-1. **Assist Calculation**: Implemented a more accurate assist calculation system in `_calculate_player_stats` that tracks damage contributions to kills. Assists are now awarded to players who dealt significant damage to a victim shortly before their death.
-
-2. **KillingBlow Events**: Updated the parser to properly account for both "Kill" and "KillingBlow" events when generating timeline events and calculating player statistics.
-
-3. **Item Cost Extraction**: Fixed item cost extraction from purchase events.
-
-4. **Player Location Data**: Added default spawn locations when actual location data is missing in player events:
-   - Order team (1): (-10500.0, 0.0)
-   - Chaos team (2): (10500.0, 0.0)
-
-5. **Match Metadata**: Implemented extraction of match metadata from log files.
-
-6. **Timeline Enhancement**: Completely revamped the timeline event system with:
-   - Enhanced `TimelineEvent` model with additional fields like `event_category`, `importance`, `team_id`, and more
-   - Specialized helper methods for different event types (kills, objectives, economy)
-   - Database migration script to update existing databases
-   - Comprehensive categorization and importance rating system
-   - See `notebook.md` for detailed implementation notes
-
-## Project Structure
-
-- `smite_parser/` - Main package directory
-  - `__init__.py` - Package initialization
-  - `config/` - Configuration management
-    - `__init__.py`
-    - `config.py` - Configuration implementation
-  - `models.py` - SQLAlchemy ORM models for database
-  - `transformers.py` - Data transformation functions
-  - `parser.py` - Core parser implementation
-  - `cli.py` - Command-line interface
-- `tests/` - Test directory
-  - `__init__.py`
-  - `conftest.py` - Test fixtures
-  - `test_models.py` - Tests for database models
-  - `test_transformers.py` - Tests for data transformation
-  - `test_parser.py` - Tests for parser functionality
-- `scripts/` - Utility scripts
-  - `enhance_timeline.py` - Script to update timeline event schema and reprocess events
-- `agent_notes/` - Documentation for agents
-  - `project_checklist.md` - Project progress tracking
-  - `agentnotes.md` - This file
-  - `notebook.md` - Interesting findings and notes
-  - `technical_spec.md` - Technical specifications
-
-## Project Approach
-
-The parser is implemented with a modular architecture that separates concerns:
-
-1. **Configuration Module**: Handles parser settings and options
-2. **Models Module**: Defines SQLAlchemy ORM models for the database
-3. **Transformers Module**: Contains functions to transform raw events into model instances
-4. **Parser Module**: Core implementation that reads log files and processes events
-5. **CLI Module**: Command-line interface for user interaction
-
-## Implementation Details
-
-### Parser Design
-
-The parser follows these key processing steps:
-
-1. **File Reading**: Reads and parses the JSON lines in combat log files
-2. **Metadata Collection**: Extracts match ID, player names, timestamps and other metadata
-3. **Entity Processing**: Creates records for players and other entities
-4. **Event Processing**: Processes events in batches for efficient database insertion
-5. **Derived Data Generation**: Calculates statistics and generates timeline events
-
-### Data Transformation
-
-Each event type has a specialized transformer function:
-
-- `transform_combat_event()`: Processes combat events (damage, healing, kills)
-- `transform_reward_event()`: Processes reward events (gold, experience, objectives)
-- `transform_item_event()`: Processes item events (purchases, sales)
-- `transform_player_event()`: Processes player events (role assignments, level ups)
-
-### Timeline Event Generation
-
-The timeline generation system now uses specialized helper methods:
-
-- `_generate_kill_timeline_events()`: Tracks player kills with assist detection
-- `_generate_objective_timeline_events()`: Tracks structure destruction and jungle boss kills
-- `_generate_economy_timeline_events()`: Tracks significant item purchases and gold rewards
-
-Each method calculates appropriate importance levels and categorizes events to enable better analysis and visualization.
-
-### Database Design
-
-The database schema includes these key tables:
-
-- **Match**: Information about each match
-- **Player**: Player information and attributes
-- **Entity**: All entities in the game (players, NPCs, structures)
-- **CombatEvent**: Combat interactions (damage, healing, kills)
-- **RewardEvent**: Reward acquisitions (gold, experience)
-- **ItemEvent**: Item transactions (purchases, sales)
-- **PlayerEvent**: Player-specific events
-- **PlayerStat**: Aggregated statistics for each player
-- **TimelineEvent**: Key events for match timeline visualization with enhanced fields
-
-## Testing Strategy
-
-Testing is implemented with pytest and includes:
-
-1. **Unit Tests**: For individual components (transformers, models)
-2. **Functional Tests**: For parser functionality
-3. **Integration Tests**: For database operations
-4. **End-to-End Tests**: For complete parser pipeline
-
-Test fixtures provide sample data for testing, including mock combat log entries.
-
-## Current Status
-
-The implementation is progressing well:
-
-- [x] Configuration module complete
-- [x] SQLAlchemy models defined
-- [x] Data transformation functions implemented
-- [x] Core parser functionality implemented
-- [x] CLI interface created
-- [x] Timeline event enhancement implemented
-- [x] Unit tests for transformers and models
-- [x] Parser tests created
-- [ ] Integration tests
-- [ ] End-to-end tests
-- [x] Basic documentation
-- [ ] Comprehensive API documentation
-- [ ] Packaging
-
-See `project_checklist.md` for detailed progress tracking.
-
-## Future Directions
-
-After completing the current implementation:
-
-1. Implement algorithmic team fight detection
-2. Create visualization tools for enhanced timeline analysis
-3. Implement match comparison functionality
-4. Add export options for different formats
-5. Create a web interface for browsing match data
-
-## Key Files
-- `CombatLogExample.log` - Sample combat log file from SMITE 2
-- `agent_notes/` - Folder containing project documentation
-  - `project_checklist.md` - Tracks progress on the project tasks
-  - `notebook.md` - Contains observations and insights about the data
-  - `agentnotes.md` - This file, with critical project information
-  - `technical_spec.md` - Technical specification for the database schema
-- `scripts/enhance_timeline.py` - Utility script for timeline enhancement
-- `data_explore/` - Scripts used for data exploration
-
-## Project Goals
-1. Parse combat log files from SMITE 2
-2. Clean and normalize the data for database storage
-3. Create a well-structured SQLite database that supports:
-   - Multiple match files
-   - MOBA analytics queries
-   - Timeline data
-   - Player performance metrics
-   - Map/location data for heat maps
-
-## Data Structure
-Combat logs contain JSON-formatted events with these main types:
-- `start` - Match initialization
-- `playermsg` - Player actions (god selection, role assignments)
-- `itemmsg` - Item purchases
-- `CombatMsg` - Combat actions (damage, healing, CC, kills)
-- `RewardMsg` - Experience and currency rewards
-
-Each event type has multiple subtypes and varying field structures.
-
-## Development Status
-Currently in Phase 4 (Testing). Core functionality is complete, timeline enhancement is implemented, and we're working on comprehensive testing and documentation.
-
-## Next Steps
-1. Complete integration and end-to-end tests
-2. Implement algorithmic team fight detection
-3. Create visualization tools for timeline analysis
-4. Prepare for packaging and distribution
-
-## Notes to Self
-- Remember to convert all string values to appropriate data types
-- Handle match ID generation/tracking for multiple files
-- Pay attention to team identification in the value1 field
-- Consider performance optimizations for the large volume of combat events
-- Build the database to support the analytics a MOBA esports coach would need 
-- For future timeline enhancements, consider implementing player milestone tracking (first blood, pentakill, etc.) 
+## GitHub Repository
+- Repository is maintained and regularly updated
+- Documentation reflects current state of the project
+- Testing framework ensures code quality
